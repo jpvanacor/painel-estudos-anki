@@ -134,6 +134,35 @@ for day in range(-21, 1):
             rows.append((rid, cid, -1, ease, 5, 2, 2501, rng.randint(6000, 14000), 1))  # factor 2501 marks fake history
 col.db.executemany("insert into revlog (id, cid, usn, ease, ivl, lastIvl, factor, time, type) values (?,?,?,?,?,?,?,?,?)", rows)
 
-col.set_config("painelEstudos", {"version": 1, "goal": {"unit": "cards", "value": 60}})
+# Settings as Painel 0.1 left them: an edital in the old shape, converted to the Roleta on the
+# first run. The goal sits just above today's answers, so the session crosses it.
+yesterday = int(time.time()) - 86400
+col.set_config(
+    "painelEstudos",
+    {
+        "version": 1,
+        "goal": {"unit": "cards", "value": 39},
+        "edital": {
+            "cycle": 1,
+            "current": "e2",
+            "materias": [
+                {
+                    "name": "Direito Civil",
+                    "deck": None,
+                    "groups": [
+                        {
+                            "name": None,
+                            "topics": [
+                                {"id": "e1", "name": "Prescrição e decadência (Arts. 189 a 211)", "drawn": 1, "done": 1, "times": 1, "last": yesterday},
+                                {"id": "e2", "name": "Negócio jurídico (Arts. 104 a 184)", "drawn": 1, "done": 0, "times": 1, "last": None},
+                                {"id": "e3", "name": "Pessoas naturais (Arts. 1º a 39)", "drawn": 0, "done": 0, "times": 0, "last": None},
+                            ],
+                        }
+                    ],
+                }
+            ],
+        },
+    },
+)
 col.close()
 print(f"profile ready: {len(rows)} past answers, base {base}")

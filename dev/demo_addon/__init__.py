@@ -1,7 +1,7 @@
 """Test-only add-on: clicks through the Painel de Estudos like a person and saves screenshots.
 
 Installed only in the throwaway test profile made by dev/make_test_profile.py.
-Screenshots go to the folder in the PAINEL_SHOTS environment variable.
+Screenshots go to the folder in PAINEL_SHOTS; PAINEL_FIXTURE points to a Roleta backup to import.
 """
 
 import json
@@ -12,19 +12,7 @@ from aqt.qt import QGuiApplication, QTimer
 from aqt.theme import Theme
 
 SHOTS = os.environ.get("PAINEL_SHOTS", "")
-EDITAL = {
-    "Direito Penal": [
-        "Crimes contra a pessoa (Arts. 121 a 154)",
-        "Crimes contra o patrimônio (Arts. 155 a 183)",
-        "Imputabilidade penal (Arts. 26 a 28)",
-    ],
-    "Direito Administrativo": {
-        "Lei de Improbidade (8.429/92)": ["Sujeitos", "Atos de improbidade", "Sanções"],
-        "Lei de Licitações (14.133/21)": ["Princípios", "Modalidades"],
-    },
-    "Processo Penal": ["Ação penal (Arts. 24 a 62)"],
-    "Direito Civil": ["Prescrição e decadência (Arts. 189 a 211)"],
-}
+FIXTURE = os.environ.get("PAINEL_FIXTURE", "")
 
 
 def log(msg):
@@ -44,12 +32,13 @@ def click(selector):
     js(f"(function(){{var el=document.querySelector({json.dumps(selector)}); if(el) el.click(); else console.log('demo: missing ' + {json.dumps(selector)});}})()")
 
 
-def key(k):
-    js(f"document.dispatchEvent(new KeyboardEvent('keydown', {{key: {json.dumps(k)}, bubbles: true}}))")
+def key(k, **mods):
+    opts = {"key": k, "bubbles": True, **mods}
+    js(f"document.dispatchEvent(new KeyboardEvent('keydown', {json.dumps(opts)}))")
 
 
-def report_state(label):
-    mw.painel_estudos.web.evalWithCallback("JSON.stringify(window.PE && PE.state())", lambda r: log(f"{label}: {r}"))
+def report(label, expr="JSON.stringify(window.PE && PE.state())"):
+    mw.painel_estudos.web.evalWithCallback(expr, lambda r: log(f"{label}: {r}"))
 
 
 def theme(dark):
@@ -73,7 +62,6 @@ def answer(right):
 
 
 def advance():
-    """Answers the current card (right, then Fácil) so the session moves toward its end."""
     api = mw.painel_estudos.api
     if not api.card:
         return
@@ -85,13 +73,9 @@ def advance():
         key("4")
 
 
-def undo_key():
-    js("document.dispatchEvent(new KeyboardEvent('keydown', {key: 'z', ctrlKey: true, bubbles: true}))")
-
-
 def study_deck(name):
     js(
-        "document.querySelectorAll('[data-act=\"study\"][data-did]').forEach(function(b){"
+        "document.querySelectorAll('tr [data-act=\"study\"][data-did]').forEach(function(b){"
         f" if (b.closest('tr').textContent.indexOf({json.dumps(name)}) >= 0) b.click(); }})"
     )
 
@@ -103,72 +87,117 @@ def open_row(name):
     )
 
 
+def paste_fixture():
+    with open(FIXTURE, encoding="utf-8") as handle:
+        text = handle.read()
+    js(f"document.getElementById('ro-paste').value = {json.dumps(text)}")
+
+
+def type_note(text):
+    js(
+        "(function(){var t=document.querySelector('textarea[data-note]'); if(!t) return;"
+        f" t.value={json.dumps(text)}; t.dispatchEvent(new Event('input', {{bubbles:true}}));}})()"
+    )
+
+
+def roleta_state(label):
+    state = mw.painel_estudos.api._data()["roleta"]
+    cats = [(c["name"], c.get("deck"), sum(len(s["topics"]) for s in c["subs"]), sum(1 for s in c["subs"] for t in s["topics"] if t["seen"])) for c in state["cats"]]
+    notes = [t["t"] for c in state["cats"] for s in c["subs"] for t in s["topics"] if t.get("note")]
+    log(f"{label}: cats={cats} last={state.get('last')} notes={notes}")
+
+
+def render_sounds():
+    js("Promise.all(PE.sounds().map(function(n){return PE.renderSound(n, 3);})).then(function(r){window.__sfx=r;})")
+
+
 STEPS = [
-    (lambda: shot("01_hoje"), 1500),
-    (lambda: click('[data-go="edital"]'), 1500),
-    (lambda: js(f"document.getElementById('paste').value = {json.dumps(json.dumps(EDITAL, ensure_ascii=False, indent=2))}"), 300),
-    (lambda: click('[data-act="import"]'), 1800),
-    (lambda: click('[data-act="draw"]'), 1500),
-    (lambda: shot("02_edital"), 400),
-    (lambda: click('[data-go="home"]'), 1800),
-    (lambda: shot("03_hoje_com_topico"), 400),
-    # Estudar tudo: the weakest matéria (Direito Penal) comes first
+    (lambda: js("window.addEventListener('error', function(e){ console.error('STACK ' + (e.error && e.error.stack)); });"), 100),
+    (lambda: report("motion", "JSON.stringify({reduced: matchMedia('(prefers-reduced-motion: reduce)').matches, noMotion: document.documentElement.classList.contains('no-motion')})"), 200),
+    (lambda: roleta_state("converted from 0.1"), 300),
+    (lambda: shot("01_hoje"), 300),
+    (lambda: js("var m=document.getElementById('main'); m.scrollTop = m.scrollHeight;"), 500),
+    (lambda: shot("01b_hoje_roleta"), 300),
+    (lambda: js("document.getElementById('main').scrollTop = 0;"), 900),
+    # study: Certo/Errado with animation, crossing the goal (39) on the second answer
     (lambda: click('[data-act="study"]'), 2200),
-    (lambda: report_state("first card"), 300),
-    (lambda: shot("04_ce_pergunta"), 300),
-    (lambda: answer(False), 1800),
-    (lambda: shot("05_ce_errou"), 300),
-    (lambda: key(" "), 2000),  # Continuar = De novo
-    (lambda: report_state("second card"), 300),
-    (lambda: answer(True), 1800),
-    (lambda: shot("06_ce_acertou"), 300),
-    (lambda: key("3"), 2000),  # Bom
-    (lambda: report_state("third card"), 300),
-    (lambda: undo_key(), 2000),  # Ctrl+Z: the card answered Bom comes back
-    (lambda: report_state("after undo"), 300),
-    (lambda: shot("06b_desfeito"), 300),
-    (lambda: click('[data-act="end"]'), 1800),
-    # matérias, then Direito Administrativo with multiple choice
-    (lambda: click('[data-go="materias"]'), 1600),
-    (lambda: shot("07_materias"), 300),
-    (lambda: open_row("Direito Penal"), 1800),
-    (lambda: shot("08_materia"), 300),
-    (lambda: js("PE.go('home')"), 1600),
-    (lambda: study_deck("Administrativo"), 2200),
-    (lambda: shot("09_mc_pergunta"), 300),
-    (lambda: answer(False), 1800),
-    (lambda: shot("10_mc_errou"), 300),
-    (lambda: key("enter"), 2000),
-    (lambda: report_state("after mc"), 300),
-    (lambda: answer(True), 1800),
-    (lambda: shot("11_mc_acertou"), 300),
-    (lambda: key("2"), 1800),  # Difícil
-    (lambda: click('[data-act="end"]'), 1600),
-    # Direito Civil: normal cards
-    (lambda: study_deck("Civil"), 2200),
+    (lambda: answer(False), 140),
+    (lambda: shot("02_ce_errou_animando"), 1600),
+    (lambda: shot("03_ce_errou"), 300),
     (lambda: key(" "), 1800),
-    (lambda: shot("12_normal_resposta"), 300),
-    (lambda: key("4"), 1800),  # Fácil
-    (lambda: key(" "), 1500),
-    (lambda: key("3"), 1800),  # Bom: goes to learning and comes back, as in Anki
-    *[(advance, 1400) for _ in range(6)],
-    (lambda: shot("13_fim_sessao"), 300),
-    (lambda: click('[data-go="ajustes"]'), 1600),
-    (lambda: shot("14_ajustes"), 300),
+    (lambda: answer(True), 1600),
+    (lambda: shot("04_ce_acertou"), 300),
+    (lambda: key("3"), 450),
+    (lambda: shot("05_meta_cumprida"), 2600),
+    (lambda: key("z", ctrlKey=True), 1800),
+    (lambda: report("after undo"), 300),
+    (lambda: click('[data-act="end"]'), 1800),
+    # multiple choice
+    (lambda: study_deck("Administrativo"), 2200),
+    (lambda: answer(False), 1600),
+    (lambda: shot("06_mc_errou"), 300),
+    (lambda: key("enter"), 1800),
+    (lambda: answer(True), 1600),
+    (lambda: key("2"), 1800),
+    (lambda: click('[data-act="end"]'), 1600),
+    # normal cards until the deck is done
+    (lambda: study_deck("Civil"), 2200),
+    (lambda: key(" "), 1600),
+    (lambda: key("4"), 1600),
+    *[(advance, 1300) for _ in range(6)],
+    (lambda: shot("07_fim_sessao_animando"), 900),
+    (lambda: shot("08_fim_sessao"), 300),
+    # the Roleta: the 0.1 edital became a matéria, then a Roleta backup replaces it
+    (lambda: click('[data-go="roleta"]'), 1800),
+    (lambda: shot("09_roleta_convertida"), 300),
+    (lambda: click('[data-act="ro-import"]'), 900),
+    (paste_fixture, 300),
+    (lambda: shot("10_importar"), 300),
+    (lambda: click('[data-act="ro-do-import"]'), 1200),
+    (lambda: shot("11_confirmar_backup"), 300),
+    (lambda: click('[data-act="ask-ok"]'), 1800),
+    (lambda: roleta_state("after backup import"), 300),
+    (lambda: shot("12_roleta_importada"), 300),
+    # spin with Space; picture mid-spin and the result
+    (lambda: key(" "), 1300),
+    (lambda: report("spinning"), 200),
+    (lambda: shot("13_girando"), 5200),
+    (lambda: report("after spin"), 300),
+    (lambda: shot("14_resultado"), 300),
+    (lambda: type_note("Ler os arts. 13 a 25 antes dos cartões"), 900),
+    (lambda: click('[data-act="ro-again"]'), 6600),
+    (lambda: roleta_state("after sortear outro"), 300),
+    (lambda: shot("15_sortear_outro"), 300),
+    (lambda: key("Escape"), 900),
+    (lambda: click('[data-act="ro-sel"][data-sel="s-pe"]'), 1200),
+    (lambda: shot("16_subcategoria"), 300),
+    (lambda: click('[data-act="ro-tab"][data-tab="list"]'), 900),
+    (lambda: js("var s=document.getElementById('ro-search'); s.value='crimes'; s.dispatchEvent(new Event('input',{bubbles:true}));"), 900),
+    (lambda: shot("17_topicos_busca"), 300),
+    (lambda: click('[data-act="ro-remove"]'), 1000),
+    (lambda: shot("18_remover_desfazer"), 300),
+    (lambda: click(".toast-act"), 1200),
+    (lambda: roleta_state("after remove and undo"), 300),
+    (lambda: click('[data-act="ro-org"]'), 1000),
+    (lambda: shot("19_organizar"), 300),
+    (lambda: key("Escape"), 800),
+    # sounds rendered offline and measured
+    (render_sounds, 2500),
+    (lambda: report("sounds", "JSON.stringify(window.__sfx)"), 600),
     # dark theme
     (lambda: theme(True), 2200),
+    (lambda: key(" "), 6200),
+    (lambda: shot("20_roleta_escura"), 300),
+    (lambda: key("Escape"), 800),
+    (lambda: shot("20b_roleta_escura_parada"), 300),
     (lambda: js("PE.go('home')"), 1800),
-    (lambda: shot("15_hoje_escuro"), 300),
-    (lambda: click('[data-act="study"]'), 2200),
-    (lambda: answer(True), 1800),
-    (lambda: shot("16_ce_escuro"), 300),
-    (lambda: click('[data-act="end"]'), 1500),
+    (lambda: shot("21_hoje_escuro"), 300),
+    (lambda: js("var m=document.getElementById('main'); m.scrollTop = m.scrollHeight;"), 500),
+    (lambda: shot("21b_hoje_roleta_escuro"), 300),
     (lambda: theme(False), 2000),
-    # back to Anki's own interface and to the panel again
-    (lambda: click('[data-open="anki"]'), 2200),
-    (lambda: shot("17_interface_anki"), 300),
-    (lambda: mw.painel_estudos.action.trigger(), 2200),
-    (lambda: shot("18_painel_de_volta"), 300),
+    (lambda: click('[data-go="ajustes"]'), 1600),
+    (lambda: js("window.scrollTo(0,0); var m=document.getElementById('main'); m.scrollTop = m.scrollHeight;"), 600),
+    (lambda: shot("22_ajustes_sons"), 300),
     (lambda: mw.close(), 0),
 ]
 

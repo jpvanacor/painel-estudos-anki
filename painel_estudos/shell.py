@@ -19,9 +19,11 @@ ANKI_KEYS = {"D", "S", "A", "B", "T", "Shift+T", "Y", "/"}
 
 PUBLIC = {
     "boot", "home", "start", "stop", "current", "reveal", "choose", "answer", "bury", "suspend",
-    "undo", "replay", "edit", "materias", "materia", "edital", "edital_import", "edital_clear",
-    "edital_link", "topic_toggle", "draw", "set_scope", "topic_done", "topic_skip", "new_cycle", "settings",
-    "save_settings", "open",
+    "undo", "replay", "edit", "materias", "materia", "settings", "save_settings", "set_fx", "open",
+    "roleta", "roleta_select", "roleta_spin", "roleta_again", "roleta_toggle", "roleta_unsee",
+    "roleta_reset", "roleta_note", "roleta_rename", "roleta_remove", "roleta_add", "roleta_save_cat",
+    "roleta_delete_cat", "roleta_inspect", "roleta_import", "roleta_file", "roleta_save_backup",
+    "roleta_copy", "roleta_clear", "roleta_undo",
 }
 
 

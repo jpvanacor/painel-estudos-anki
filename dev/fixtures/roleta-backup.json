@@ -1,0 +1,76 @@
+{
+  "_roleta": 2,
+  "exportedAt": "2026-10-24T20:00:00.000Z",
+  "cats": [
+    {
+      "id": "c-penal",
+      "name": "Direito Penal",
+      "sel": "_all",
+      "subs": [
+        {
+          "id": "s-pg",
+          "name": "Parte geral",
+          "topics": [
+            { "id": "t1", "t": "Aplicação da lei penal (Arts. 1º a 12)", "seen": 1792800000000, "note": "Revisar extraterritorialidade (art. 7º)" },
+            { "id": "t2", "t": "Crime (Arts. 13 a 25)", "seen": null, "note": "" },
+            { "id": "t3", "t": "Imputabilidade penal (Arts. 26 a 28)", "seen": 1792700000000, "note": "" },
+            { "id": "t4", "t": "Concurso de pessoas (Arts. 29 a 31)", "seen": null, "note": "" },
+            { "id": "t5", "t": "Penas (Arts. 32 a 52)", "seen": null, "note": "" }
+          ]
+        },
+        {
+          "id": "s-pe",
+          "name": "Parte especial",
+          "topics": [
+            { "id": "t6", "t": "Crimes contra a pessoa (Arts. 121 a 154)", "seen": null, "note": "" },
+            { "id": "t7", "t": "Crimes contra o patrimônio (Arts. 155 a 183)", "seen": 1792850000000, "note": "Furto noturno: aumento de 1/3" },
+            { "id": "t8", "t": "Crimes contra a dignidade sexual (Arts. 213 a 234)", "seen": null, "note": "" },
+            { "id": "t9", "t": "Crimes contra a administração pública (Arts. 312 a 359)", "seen": null, "note": "" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "c-adm",
+      "name": "Direito Administrativo",
+      "sel": null,
+      "subs": [
+        {
+          "id": "s-imp",
+          "name": "Lei de Improbidade (8.429/92)",
+          "topics": [
+            { "id": "a1", "t": "Sujeitos", "seen": 1792860000000, "note": "" },
+            { "id": "a2", "t": "Atos de improbidade", "seen": null, "note": "" },
+            { "id": "a3", "t": "Sanções", "seen": null, "note": "" }
+          ]
+        },
+        {
+          "id": "s-lic",
+          "name": "Lei de Licitações (14.133/21)",
+          "topics": [
+            { "id": "a4", "t": "Princípios", "seen": null, "note": "" },
+            { "id": "a5", "t": "Modalidades", "seen": null, "note": "" },
+            { "id": "a6", "t": "Agentes de contratação", "seen": null, "note": "" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "c-pp",
+      "name": "Processo Penal",
+      "sel": null,
+      "subs": [
+        {
+          "id": "s-pp",
+          "name": "",
+          "topics": [
+            { "id": "p1", "t": "Inquérito policial (Arts. 4º a 23)", "seen": null, "note": "" },
+            { "id": "p2", "t": "Ação penal (Arts. 24 a 62)", "seen": 1792780000000, "note": "" },
+            { "id": "p3", "t": "Competência (Arts. 69 a 91)", "seen": null, "note": "" },
+            { "id": "p4", "t": "Provas (Arts. 155 a 250)", "seen": null, "note": "" }
+          ]
+        }
+      ]
+    }
+  ]
+}

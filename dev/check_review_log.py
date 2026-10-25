@@ -17,7 +17,11 @@ for rid, cid, ease, typ in rows:
     text = front.split("<br>")[0][:70] if not front.startswith("<b>") else front.split("<br><br>")[1][:70]
     print(f"{names.get(ease, ease):8} | {col.decks.name(card.did):24} | {text}")
 data = col.get_config("painelEstudos", {})
-edital = data.get("edital") or {}
-done = sum(1 for m in edital.get("materias", []) for g in m["groups"] for t in g["topics"] if t["done"])
-print(f"edital: {len(edital.get('materias', []))} matérias, cycle {edital.get('cycle')}, current {edital.get('current')}, done {done}")
+roleta = data.get("roleta") or {}
+for cat in roleta.get("cats", []):
+    topics = [t for s in cat["subs"] for t in s["topics"]]
+    seen = sum(1 for t in topics if t["seen"])
+    notes = sum(1 for t in topics if t.get("note"))
+    print(f"roleta: {cat['name']:24} deck={cat.get('deck')} topics={len(topics)} seen={seen} notes={notes}")
+print(f"saved keys: {sorted(data)}; fx={data.get('fx')}")
 col.close()
