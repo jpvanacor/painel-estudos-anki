@@ -783,12 +783,12 @@
 
   const TRAP_CSS =
     ".pe-trap{text-decoration:line-through;text-decoration-thickness:2px;text-decoration-color:#c23b32;background:rgba(194,59,50,.1);border-radius:3px;-webkit-box-decoration-break:clone;box-decoration-break:clone}" +
-    ".pe-fix{display:inline-block;margin-left:.3em;padding:0 .35em;border-radius:4px;background:rgba(35,122,87,.14);color:#1d6b4b;font-weight:600;text-indent:0}" +
+    ".pe-fix{display:inline;margin-left:.3em;padding:0 .3em;border-radius:4px;background:rgba(35,122,87,.14);color:#1d6b4b;font-weight:600;-webkit-box-decoration-break:clone;box-decoration-break:clone}" +
     "html.night-mode .pe-trap{text-decoration-color:#f08a80;background:rgba(240,138,128,.16)}" +
     "html.night-mode .pe-fix{background:rgba(110,200,155,.18);color:#86dab0}" +
     ".pe-anim .pe-trap{animation:pe-trap .45s ease-out both}.pe-anim .pe-fix{animation:pe-fix .4s ease-out .2s both}" +
     "@keyframes pe-trap{from{text-decoration-color:transparent;background-color:transparent}}" +
-    "@keyframes pe-fix{from{opacity:0;transform:translateY(4px)}}";
+    "@keyframes pe-fix{from{opacity:0}}";
 
   function markTrap(frame, trap, animateIt) {
     if (!frame || !trap || !trap.from) return;
@@ -2084,6 +2084,7 @@ Regência verbal`;
         <label class="switch"><input type="checkbox" data-fx="motion" ${d.fx.motion ? "checked" : ""}><span>Animações</span></label>
         <p class="note">Se o Windows estiver com as animações desligadas (Acessibilidade, Efeitos visuais), as do painel também ficam.</p>
       </section>
+      ${mobileSection(d.mobile)}
       <section class="section"><div class="section-head"><h2>Anki</h2></div>
         <div class="actions" style="margin-top:14px"><button class="btn" data-open="prefs">Preferências do Anki</button><button class="btn" data-open="profiles">Trocar de perfil</button></div></section>
       <section class="section"><div class="section-head"><h2>Interface</h2></div>
@@ -2092,6 +2093,56 @@ Regência verbal`;
       <p class="note" style="margin-top:48px">Painel de Estudos ${esc(d.version)}, perfil ${esc(d.profile)}.</p>
     </div>`);
   }
+
+  // The phone: C/E buttons and question letters inside the cards, for AnkiDroid.
+  function mobileSection(m) {
+    const types = (m && m.types) || [];
+    const used = types.filter((t) => t.notes);
+    const on = types.filter((t) => t.state === "on");
+    const old = types.filter((t) => t.state === "old");
+    const names = (list) => list.map((t) => `${esc(t.name)}${t.notes ? ` (${plural(t.notes, "nota", "notas")})` : ""}`).join(", ");
+    let status;
+    let buttons;
+    if (!used.length && !on.length && !old.length) {
+      status = "Nenhum modelo de cartão com itens Certo/Errado ou questões apareceu na coleção.";
+      buttons = "";
+    } else if (old.length) {
+      status = `Ligado em ${names(old)}, numa versão anterior do painel.`;
+      buttons = `<button class="btn primary" data-act="mobile-on">Atualizar</button><button class="btn" data-act="mobile-off">Desativar</button>`;
+    } else if (on.length) {
+      status = `Ligado em ${names(on)}. Chega ao celular na próxima sincronização.`;
+      buttons = `<button class="btn" data-act="mobile-off">Desativar</button>`;
+    } else {
+      status = `Desligado. Vai no modelo ${names(used)}.`;
+      buttons = `<button class="btn primary" data-act="mobile-on">Ativar no celular</button>`;
+    }
+    return `<section class="section"><div class="section-head"><h2>Celular (AnkiDroid)</h2><span class="muted">vale depois de sincronizar</span></div>
+      <p class="note">Põe os botões C e E, e as letras das questões, dentro dos próprios cartões, para responder no AnkiDroid como aqui: errou, Continuar, que dá De novo; acertou, Difícil, Bom ou Fácil. No computador e no AnkiWeb os cartões continuam iguais.</p>
+      <p class="mobile-status">${status}</p>
+      ${buttons ? `<div class="actions" style="margin-top:12px">${buttons}</div>` : ""}
+      <p class="note">Funciona na tela de estudo padrão do AnkiDroid. Na tela de estudo nova, que ainda é experimental, o cartão mostra se você acertou, e a nota fica nos botões do próprio AnkiDroid.</p>
+    </section>`;
+  }
+
+  const mobileOn = () =>
+    guarded(async () => {
+      const ok = await ask({
+        title: "Ativar no celular?",
+        msg: "O painel acrescenta um bloco de código no fim da frente e do verso do modelo de cartão desses itens. O resto do modelo não muda, e Desativar tira o bloco.",
+        ok: "Ativar",
+      });
+      if (!ok) return;
+      await api("mobile_enable");
+      await go("ajustes");
+      toast("Pronto. Sincronize o computador e depois o celular.");
+    });
+
+  const mobileOff = () =>
+    guarded(async () => {
+      await api("mobile_disable");
+      await go("ajustes");
+      toast("Botões tirados dos cartões. Sincronize para valer no celular.");
+    });
 
   const saveSettings = () =>
     guarded(async () => {
@@ -2117,6 +2168,8 @@ Regência verbal`;
     undo: () => cardAction("undo"),
     replay: () => api("replay").catch(() => {}),
     reason: (t) => setReason(t.dataset.code),
+    "mobile-on": () => mobileOn(),
+    "mobile-off": () => mobileOff(),
     "edit-card": (t) => api("edit", { cid: Number(t.dataset.cid) }).catch(() => {}),
     "err-days": (t) => go("erros", { days: Number(t.dataset.days) }),
     "err-redo": (t) => studyErrors(Number(t.dataset.days), t.dataset.did ? Number(t.dataset.did) : null),

@@ -514,6 +514,8 @@ body.spinning .ro-toolbar, body.spinning .chips, body.spinning .ro-sheet, body.s
 .trap-to { color: var(--right); font-weight: 600; }
 .err-sheet { margin-bottom: 8px; }
 
+.mobile-status { margin: 14px 0 0; font-weight: 500; }
+
 /* ------------------------------------------------------------------ dialogs */
 .overlay { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; padding: 24px; background: var(--scrim); }
 .dialog {

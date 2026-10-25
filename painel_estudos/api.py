@@ -19,10 +19,11 @@ from aqt.sound import av_player
 from aqt.theme import theme_manager
 
 from . import cards as cardfmt
+from . import mobile
 from . import roleta as ro
 from . import stats, store, topics
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 RATINGS = {1: CardAnswer.AGAIN, 2: CardAnswer.HARD, 3: CardAnswer.GOOD, 4: CardAnswer.EASY}
 # Topic and error sessions run in a filtered deck of their own, emptied and removed at the end.
 TEMP_DECK = "Painel de Estudos (sessão)"
@@ -826,6 +827,7 @@ class Api:
             "matters": [name for name, _did in self._matters(data)],
             "version": VERSION,
             "profile": mw.pm.name,
+            "mobile": self.mobile_status(),
         }
 
     def save_settings(self, goal: dict | None = None, root: int | None = None, fx: dict | None = None) -> dict:
@@ -854,6 +856,45 @@ class Api:
         except (TypeError, ValueError):
             volume = 0.7
         return {"sound": bool(fx.get("sound", True)), "volume": round(volume, 2), "motion": bool(fx.get("motion", True))}
+
+    # ------------------------------------------------------------------ celular (AnkiDroid)
+    def mobile_status(self) -> dict:
+        """The note types with Certo/Errado items or questions, and whether the phone block is in them."""
+        counts = dict(self.col.db.all(mobile.NOTES_SQL))
+        types = []
+        for nt in self.col.models.all():
+            state = mobile.state_of(nt["tmpls"])
+            notes = counts.get(nt["id"], 0)
+            if notes or state != "off":
+                types.append({"id": nt["id"], "name": nt["name"], "notes": notes, "state": state})
+        types.sort(key=lambda t: -t["notes"])
+        return {"types": types, "version": mobile.VERSION}
+
+    def mobile_enable(self) -> dict:
+        script, style = mobile.assets()
+        changed = 0
+        for t in self.mobile_status()["types"]:
+            if not t["notes"]:
+                continue
+            nt = self.col.models.get(t["id"])
+            for tmpl in nt["tmpls"]:
+                tmpl["qfmt"] = mobile.apply(tmpl["qfmt"], "q", script, style)
+                tmpl["afmt"] = mobile.apply(tmpl["afmt"], "a", script, style)
+            self.col.models.update_dict(nt)
+            changed += 1
+        if not changed:
+            raise UserError("Nenhum modelo de cartão com itens Certo/Errado ou questões foi encontrado.")
+        return self.mobile_status()
+
+    def mobile_disable(self) -> dict:
+        for nt in self.col.models.all():
+            if mobile.state_of(nt["tmpls"]) == "off":
+                continue
+            for tmpl in nt["tmpls"]:
+                tmpl["qfmt"] = mobile.strip(tmpl["qfmt"])
+                tmpl["afmt"] = mobile.strip(tmpl["afmt"])
+            self.col.models.update_dict(nt)
+        return self.mobile_status()
 
     # ------------------------------------------------------------------ janelas do Anki
     def open(self, what: str, did: int | None = None) -> dict:
