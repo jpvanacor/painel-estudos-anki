@@ -31,7 +31,7 @@ Quem usava o Edital da versão 0.1 não perde nada: ao abrir a 0.2 ou mais nova,
 
 ## Instalar
 
-1. Baixe o arquivo `.ankiaddon` da última versão em *Releases*.
+1. Na pasta [`versoes`](versoes), abra o arquivo da versão mais nova (hoje, `painel_estudos-0.3.0.ankiaddon`) e baixe pelo botão de download do GitHub.
 2. No Anki: Ferramentas, Extensões, Instalar de um arquivo. Escolha o arquivo e reinicie o Anki.
 
 Para atualizar, instale o arquivo novo do mesmo jeito. Se algo der errado, segure Shift enquanto abre o Anki: ele abre sem extensões.
@@ -47,6 +47,6 @@ Para atualizar, instale o arquivo novo do mesmo jeito. Se algo der errado, segur
 
 - `python3 -m pytest tests`: formatos de cartão, regras da Roleta e a ligação entre tópicos e cartões, sem precisar do Anki.
 - `dev/run_gui_test.sh <pasta>`: abre um Anki de verdade numa tela virtual com um perfil de teste, clica por todas as telas (estudo, Roleta, importação de backup, cartões de um tópico, caderno de erros, tema escuro), tira capturas, mede os sons e mostra o que ficou gravado no histórico de revisões. Precisa de `pip install aqt` e `xvfb`.
-- `python3 build.py`: gera `dist/painel_estudos-<versão>.ankiaddon`.
+- `python3 build.py`: gera `dist/painel_estudos-<versão>.ankiaddon`. Cada versão publicada é copiada para `versoes/`.
 
 Fontes: Barlow e Barlow Semi Condensed, licença SIL Open Font License (`painel_estudos/web/fonts/OFL-Barlow.txt`).
