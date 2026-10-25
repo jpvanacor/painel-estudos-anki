@@ -180,7 +180,7 @@ def main() -> None:
         page.wait_for_load_state("load")
         page.screenshot(path=str(SHOTS / "sem_escolha_2_verso.png"), full_page=True)
         results["sem_escolha"] = {"back": state()}
-        # desktop Anki or AnkiWeb: nothing changes
+        # desktop Anki (a page without AnkiDroid's marks): nothing changes
         page.goto(url(pages["computador"][0]))
         page.wait_for_load_state("load")
         results["computador"] = {"front": state()}

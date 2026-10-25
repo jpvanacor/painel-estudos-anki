@@ -2117,10 +2117,10 @@ Regência verbal`;
       buttons = `<button class="btn primary" data-act="mobile-on">Ativar no celular</button>`;
     }
     return `<section class="section"><div class="section-head"><h2>Celular (AnkiDroid)</h2><span class="muted">vale depois de sincronizar</span></div>
-      <p class="note">Põe os botões C e E, e as letras das questões, dentro dos próprios cartões, para responder no AnkiDroid como aqui: errou, Continuar, que dá De novo; acertou, Difícil, Bom ou Fácil. No computador e no AnkiWeb os cartões continuam iguais.</p>
+      <p class="note">Põe os botões C e E, e as letras das questões, dentro dos próprios cartões, para responder no AnkiDroid como aqui: errou, Continuar, que dá De novo; acertou, Difícil, Bom ou Fácil. No Anki do computador os cartões continuam iguais.</p>
       <p class="mobile-status">${status}</p>
       ${buttons ? `<div class="actions" style="margin-top:12px">${buttons}</div>` : ""}
-      <p class="note">Funciona na tela de estudo padrão do AnkiDroid. Na tela de estudo nova, que ainda é experimental, o cartão mostra se você acertou, e a nota fica nos botões do próprio AnkiDroid.</p>
+      <p class="note">Feito para a tela de estudo padrão do AnkiDroid. Na tela de estudo nova, que ainda é experimental, o cartão mostra se você acertou, e a nota fica nos botões do próprio AnkiDroid.</p>
     </section>`;
   }
 

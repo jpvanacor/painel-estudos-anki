@@ -1,7 +1,7 @@
 /* Painel de Estudos no celular: os botões C/E e as letras das questões dentro do próprio cartão.
  *
  * Vai no modelo de cartão (frente e verso) quando o painel ativa "Celular" em Ajustes, e só age no
- * AnkiDroid. No computador, no AnkiWeb e dentro do painel o cartão continua como está.
+ * AnkiDroid. No Anki do computador e dentro do painel o cartão continua como está.
  *
  * Na frente, tocar numa opção guarda a escolha (sessionStorage, que o AnkiDroid mantém entre a
  * frente e o verso) e vira o cartão. No verso, o script compara a escolha com o gabarito, marca as
