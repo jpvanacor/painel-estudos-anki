@@ -23,7 +23,8 @@ PUBLIC = {
     "roleta", "roleta_select", "roleta_spin", "roleta_again", "roleta_toggle", "roleta_unsee",
     "roleta_reset", "roleta_note", "roleta_rename", "roleta_remove", "roleta_add", "roleta_save_cat",
     "roleta_delete_cat", "roleta_inspect", "roleta_import", "roleta_file", "roleta_save_backup",
-    "roleta_copy", "roleta_clear", "roleta_undo",
+    "roleta_copy", "roleta_clear", "roleta_undo", "roleta_topic_cards", "roleta_link",
+    "roleta_card_counts", "study_topic", "erros", "erro_card", "study_errors",
 }
 
 

@@ -248,3 +248,19 @@ def test_painel_01_edital_is_converted():
     assert topics["Roubo"]["seen"] == 1700000000000 and topics["Furto"]["seen"] and topics["Dano"]["seen"] is None
     assert topics["Furto"]["times"] == 3 and state["last"] == "a1"
     assert state["cats"][0]["deck"] == 7 and state["cats"][0]["deck_manual"] is True
+
+
+def test_topic_card_link_is_kept_and_cleaned():
+    state = loaded()
+    tid = state["cats"][0]["subs"][0]["topics"][0]["id"]
+    ro.set_cards_link(state, tid, {"tag": " direito_administrativo::lei_14133 "})
+    assert ro.find_topic(state, tid)[2]["cards"] == {"tag": "direito_administrativo::lei_14133"}
+    again = ro.load(json.loads(json.dumps(state)))
+    assert ro.find_topic(again, tid)[2]["cards"] == {"tag": "direito_administrativo::lei_14133"}
+    ro.set_cards_link(state, tid, {"law": "lei14133"})
+    assert ro.find_topic(state, tid)[2]["cards"] == {"law": "lei14133"}
+    ro.set_cards_link(state, tid, None)
+    assert "cards" not in ro.find_topic(state, tid)[2]
+    assert ro.clean_link({"tag": 5}) is None and ro.clean_link("x") is None
+    with pytest.raises(ro.RoletaError):
+        ro.set_cards_link(state, "nope", None)

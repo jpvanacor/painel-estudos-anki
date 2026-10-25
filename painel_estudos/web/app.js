@@ -19,6 +19,10 @@
     roTab: "hist",
     roFilter: "all",
     roQuery: "",
+    roCounts: null, // cards per topic of one matéria: {cat, counts: {tid: {n, ambiguous}}}
+    reason: null, // why the current card was missed, chosen after a wrong answer
+    returnTo: null, // where Encerrar goes after a topic or error session
+    errDays: 7,
   };
 
   // ---------------------------------------------------------------- helpers
@@ -328,6 +332,7 @@
     // changes width. A ResizeObserver across documents loops in Chromium.
     frame._fit = () => fitFrame(frame);
     frame.addEventListener("load", () => {
+      frame._loaded = true;
       frame._fit();
       const doc = frame.contentDocument;
       if (!doc || !doc.body) return;
@@ -409,6 +414,7 @@
     ["home", "Hoje"],
     ["materias", "Matérias"],
     ["roleta", "Roleta"],
+    ["erros", "Caderno de erros"],
     ["ajustes", "Ajustes"],
   ];
   const ANKI = [
@@ -444,6 +450,7 @@
     materias: viewMaterias,
     materia: (a) => viewMateria(a.did),
     roleta: viewRoleta,
+    erros: viewErros,
     ajustes: viewAjustes,
   };
 
@@ -570,6 +577,7 @@
           ? `<button class="btn primary" data-act="study">Estudar tudo</button><span class="muted">${plural(d.due, "cartão", "cartões")} para hoje, ${aboutMinutes(Math.max(1, d.eta_min))}. A matéria mais fraca vem primeiro.</span>`
           : `<span class="muted">Nada para revisar agora.</span>`
       }</div>
+      ${d.erros7 ? `<p class="start-note muted">Caderno de erros: ${plural(d.erros7, "cartão errado", "cartões errados")} nos últimos 7 dias. <button class="link" data-go="erros">Abrir o caderno</button></p>` : ""}
       <section class="section">
         <div class="section-head"><h2>Matérias de hoje</h2><span class="muted">da mais fraca para a mais forte</span></div>
         ${planHtml}
@@ -597,14 +605,22 @@
           : `<p class="draw-empty muted">Nenhum tópico sorteado ainda em ${esc(r.scope)}.</p>`
       }
       <div class="actions"><button class="btn primary" data-go="roleta" data-spin="1">Girar a roleta</button>
-      ${last && last.deck ? `<button class="btn" data-act="study" data-did="${last.deck}">Estudar os cartões dessa matéria</button>` : ""}</div>
+      ${topicStudyButton(last && last.cards, last && last.deck, last && last.id)}</div>
     </div>`;
+  }
+
+  const topicStudyLabel = (n) => (n === 1 ? "Estudar o cartão deste tópico" : `Estudar os ${n} cartões deste tópico`);
+
+  function topicStudyButton(info, deck, tid) {
+    if (info && info.count && !info.ambiguous) return `<button class="btn" data-act="ro-study-topic" data-tid="${esc(tid)}">${topicStudyLabel(info.count)}</button>`;
+    return deck ? `<button class="btn" data-act="study" data-did="${deck}">Estudar os cartões dessa matéria</button>` : "";
   }
 
   // ---------------------------------------------------------------- estudo
   function showStudy(res) {
     if (!res) return;
     if (res.view === "card") {
+      if (!S.card || S.card.id !== res.id) S.reason = null;
       S.card = res;
       S.phase = "question";
       S.answer = null;
@@ -703,13 +719,130 @@
     const r = S.result;
     const after = document.getElementById("after");
     const gabarito = S.card.mode === "ce" ? (r.correct === "CERTO" ? "Certo" : "Errado") : r.correct;
-    after.innerHTML = `<p class="verdict ${r.right ? "right" : "wrong"}" role="status"><span class="verdict-word">${r.right ? "Você acertou." : "Você errou."}</span><span class="muted">Gabarito: ${esc(gabarito)}</span></p><div class="sheet" id="back"></div>`;
+    after.innerHTML = `<p class="verdict ${r.right ? "right" : "wrong"}" role="status"><span class="verdict-word">${r.right ? "Você acertou." : "Você errou."}</span><span class="muted">Gabarito: ${esc(gabarito)}</span></p>${r.right ? "" : reasonsHtml()}<div class="sheet" id="back"></div>`;
     mountFrame(document.getElementById("back"), r.back, S.card.css);
+    if (r.trap) markTrap(document.querySelector("#q iframe"), r.trap, fresh);
     if (fresh) {
       animate(after.querySelector(".verdict-word"), "stamp");
+      animate(after.querySelector(".reasons"), "rise");
       animate(document.getElementById("back"), "enter");
     }
     if (scroll) after.scrollIntoView({ block: "start", behavior: motionOK() ? "smooth" : "auto" });
+  }
+
+  // Why a card was missed: optional, one tap or one key after a wrong answer.
+  const REASONS = [
+    ["nao_sabia", "Não sabia", "n"],
+    ["confundi", "Confundi", "c"],
+    ["atencao", "Falta de atenção", "a"],
+    ["pegadinha", "Pegadinha", "p"],
+  ];
+
+  function reasonsHtml() {
+    return `<div class="reasons" role="group" aria-label="Por que você errou? Opcional"><span class="reasons-q">Por quê?</span>${REASONS.map(
+      ([code, label, key]) =>
+        `<button class="reason ${S.reason === code ? "on" : ""}" data-act="reason" data-code="${code}" aria-pressed="${S.reason === code}" title="Tecla ${key.toUpperCase()}"><kbd>${key.toUpperCase()}</kbd>${label}</button>`
+    ).join("")}</div>`;
+  }
+
+  function setReason(code) {
+    S.reason = S.reason === code ? null : code;
+    document.querySelectorAll('[data-act="reason"]').forEach((b) => {
+      const on = b.dataset.code === S.reason;
+      b.classList.toggle("on", on);
+      b.setAttribute("aria-pressed", String(on));
+    });
+    if (S.reason) {
+      play("mark");
+      animate(document.querySelector(`[data-act="reason"][data-code="${S.reason}"] kbd`), "pop");
+    }
+  }
+
+  // The words an ERRADO item changed, marked inside the statement with the law's version beside
+  // them. The match ignores accents, case and spacing; when the words aren't there as written,
+  // the statement stays as it was (the back still shows the 🔁 line).
+  function foldMap(s) {
+    let out = "";
+    const map = [];
+    let space = false;
+    for (let i = 0; i < s.length; i++) {
+      let ch = s[i];
+      if (/\s/.test(ch)) {
+        if (space) continue;
+        space = true;
+        ch = " ";
+      } else space = false;
+      const f = ch.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+      for (let j = 0; j < f.length; j++) {
+        out += f[j];
+        map.push(i);
+      }
+    }
+    return { out, map };
+  }
+
+  const TRAP_CSS =
+    ".pe-trap{text-decoration:line-through;text-decoration-thickness:2px;text-decoration-color:#c23b32;background:rgba(194,59,50,.1);border-radius:3px;-webkit-box-decoration-break:clone;box-decoration-break:clone}" +
+    ".pe-fix{display:inline-block;margin-left:.3em;padding:0 .35em;border-radius:4px;background:rgba(35,122,87,.14);color:#1d6b4b;font-weight:600;text-indent:0}" +
+    "html.night-mode .pe-trap{text-decoration-color:#f08a80;background:rgba(240,138,128,.16)}" +
+    "html.night-mode .pe-fix{background:rgba(110,200,155,.18);color:#86dab0}" +
+    ".pe-anim .pe-trap{animation:pe-trap .45s ease-out both}.pe-anim .pe-fix{animation:pe-fix .4s ease-out .2s both}" +
+    "@keyframes pe-trap{from{text-decoration-color:transparent;background-color:transparent}}" +
+    "@keyframes pe-fix{from{opacity:0;transform:translateY(4px)}}";
+
+  function markTrap(frame, trap, animateIt) {
+    if (!frame || !trap || !trap.from) return;
+    const run = () => {
+      const doc = frame.contentDocument;
+      if (!doc || !doc.body || doc.querySelector(".pe-trap")) return;
+      const nodes = [];
+      let text = "";
+      const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) {
+        nodes.push({ node: walker.currentNode, start: text.length });
+        text += walker.currentNode.nodeValue;
+      }
+      const hay = foldMap(text);
+      const needle = foldMap(String(trap.from).trim()).out;
+      const at = needle ? hay.out.indexOf(needle) : -1;
+      if (at < 0) return;
+      const start = hay.map[at];
+      const end = hay.map[at + needle.length - 1] + 1;
+      const point = (idx, isEnd) => {
+        for (const n of nodes) {
+          const len = n.node.nodeValue.length;
+          if (isEnd ? idx <= n.start + len : idx < n.start + len) return [n.node, idx - n.start];
+        }
+        const last = nodes[nodes.length - 1];
+        return [last.node, last.node.nodeValue.length];
+      };
+      const range = doc.createRange();
+      range.setStart(...point(start, false));
+      range.setEnd(...point(end, true));
+      const mark = doc.createElement("span");
+      mark.className = "pe-trap";
+      try {
+        range.surroundContents(mark);
+      } catch (err) {
+        mark.appendChild(range.extractContents());
+        range.insertNode(mark);
+      }
+      const fix = doc.createElement("span");
+      fix.className = "pe-fix";
+      fix.textContent = trap.to;
+      fix.setAttribute("aria-label", "Na lei: " + trap.to);
+      mark.after(fix);
+      if (!doc.getElementById("pe-trap-css")) {
+        const style = doc.createElement("style");
+        style.id = "pe-trap-css";
+        style.textContent = TRAP_CSS;
+        doc.head.appendChild(style);
+      }
+      if (animateIt && motionOK()) doc.body.classList.add("pe-anim");
+      if (frame._fit) frame._fit();
+    };
+    if (frame._loaded) run();
+    else frame.addEventListener("load", run, { once: true });
   }
 
   function renderBar() {
@@ -766,7 +899,29 @@
       closeAllOverlays();
       stopSpin();
       S.enter = true;
+      S.returnTo = null;
       showStudy(await api("start", did ? { did } : {}));
+    });
+
+  // The cards of a Roleta topic, in a session of their own.
+  const studyTopic = (tid) =>
+    guarded(async () => {
+      const from = S.view === "roleta" ? "roleta" : "home";
+      const res = await api("study_topic", { tid });
+      closeAllOverlays();
+      stopSpin();
+      S.enter = true;
+      S.returnTo = from;
+      showStudy(res);
+    });
+
+  // The cards missed in a period (one matéria or all), again.
+  const studyErrors = (days, did) =>
+    guarded(async () => {
+      const res = await api("study_errors", did ? { days, did } : { days });
+      S.enter = true;
+      S.returnTo = "erros";
+      showStudy(res);
     });
 
   const choose = (choice) =>
@@ -806,7 +961,9 @@
         if (!S.result.right) rating = 1;
         else if (rating < 2) return;
       }
-      const res = await api("answer", { rating });
+      const args = { rating };
+      if (c.mode !== "basic" && !S.result.right && S.reason) args.reason = S.reason;
+      const res = await api("answer", args);
       play("next");
       S.enter = true;
       showStudy(res);
@@ -823,13 +980,22 @@
   const endStudy = () =>
     guarded(async () => {
       await api("stop");
-      await go("home");
+      const back = S.returnTo || "home";
+      S.returnTo = null;
+      await go(back);
     });
 
   function renderDone(d) {
     S.view = "done";
     S.card = null;
-    const headline = d.deck ? `Tudo em dia em ${d.deck}.` : "Tudo em dia por hoje.";
+    const headline =
+      d.kind === "topic" ? "Cartões do tópico estudados." : d.kind === "errors" ? "Erros refeitos." : d.deck ? `Tudo em dia em ${d.deck}.` : "Tudo em dia por hoje.";
+    const buttons =
+      d.kind === "topic"
+        ? `<button class="btn primary" data-go="roleta">Voltar para a Roleta</button><button class="btn" data-go="home">Voltar para Hoje</button>`
+        : d.kind === "errors"
+          ? `<button class="btn primary" data-go="erros">Voltar ao caderno</button><button class="btn" data-go="home">Voltar para Hoje</button>`
+          : `<button class="btn primary" data-go="home">Voltar para Hoje</button><button class="btn" data-go="roleta">Girar a roleta</button>`;
     const s = d.session;
     const goalText =
       s.goal_done >= s.goal_value
@@ -837,6 +1003,7 @@
         : `Meta de hoje: ${round(s.goal_done)} de ${round(s.goal_value)} ${unitWord(s.goal_unit, s.goal_value)}.`;
     const results = d.results || [];
     page(`<div class="page done">
+      ${d.kind && d.deck ? `<p class="kicker">${esc(d.deck)}</p>` : ""}
       <h1>${esc(headline)}</h1>
       <p class="lede">${
         d.answered
@@ -845,7 +1012,7 @@
       }</p>
       ${results.length ? `<div class="bubbles session-bubbles" role="img" aria-label="Respostas da sessão, em ordem: preenchida é certa, vermelha é errada">${results.map((ok, i) => `<span class="bubble ${ok ? "right" : "wrong"}" style="--i:${i}"></span>`).join("")}</div>` : ""}
       <p class="goal-note">${esc(goalText)}</p>
-      <div class="actions" style="margin-top:28px"><button class="btn primary" data-go="home">Voltar para Hoje</button><button class="btn" data-go="roleta">Girar a roleta</button></div>
+      <div class="actions" style="margin-top:28px">${buttons}</div>
     </div>`);
     const strip = document.querySelector(".session-bubbles");
     if (strip && motionOK()) {
@@ -932,6 +1099,100 @@
     </div>`);
   }
 
+  // ---------------------------------------------------------------- caderno de erros
+  const PERIODS = [
+    [1, "Hoje"],
+    [7, "7 dias"],
+    [30, "30 dias"],
+  ];
+  const periodText = (days) => (days === 1 ? "hoje" : `nos últimos ${days} dias`);
+  const gabaritoWord = (g) => (g === "CERTO" ? "Certo" : g === "ERRADO" ? "Errado" : g || "");
+
+  async function viewErros(args = {}) {
+    const days = args.days || S.errDays || 7;
+    S.errDays = days;
+    const d = await api("erros", { days });
+    const seg = PERIODS.map(([v, label]) => `<button class="${v === d.days ? "on" : ""}" data-act="err-days" data-days="${v}" aria-pressed="${v === d.days}">${label}</button>`).join("");
+    const summary = d.cards ? `${plural(d.misses, "erro", "erros")} em ${plural(d.cards, "cartão", "cartões")} ${periodText(d.days)}.` : `Nenhum erro ${periodText(d.days)}.`;
+    const redo = d.available
+      ? `<button class="btn primary" data-act="err-redo" data-days="${d.days}">${d.available === 1 ? "Refazer o cartão" : `Refazer os ${d.available} cartões`}</button>`
+      : "";
+    page(`<div class="page">
+      <h1>Caderno de erros</h1>
+      <p class="lede">Os cartões que você errou, por matéria e por lei, com a correção. Refazer monta uma sessão só com eles, e as respostas contam como revisões normais.</p>
+      <div class="err-bar"><div class="seg" role="group" aria-label="Período">${seg}</div>${redo}</div>
+      <p class="err-summary">${esc(summary)}</p>
+      ${d.cards ? reasonsSummary(d) : ""}
+      ${d.groups.map((g) => errGroup(g, d.days)).join("")}
+    </div>`);
+  }
+
+  function reasonsSummary(d) {
+    const marked = d.reasons.reduce((n, r) => n + r.n, 0);
+    if (!marked)
+      return `<p class="muted small err-hint">Quando errar um cartão, marque o motivo logo abaixo do gabarito: Não sabia, Confundi, Falta de atenção ou Pegadinha. O resumo aparece aqui.</p>`;
+    const max = Math.max(1, ...d.reasons.map((r) => r.n));
+    return `<section class="section err-reasons"><div class="section-head"><h2>Por que você errou</h2><span class="muted">${plural(marked, "erro com motivo", "erros com motivo")}, de ${d.misses}</span></div>
+      <div class="reason-bars">${d.reasons
+        .map((r) => `<div class="reason-row"><span>${esc(r.label)}</span><span class="rbar"><i style="--w:${Math.round((r.n / max) * 100)}%"></i></span><span class="num">${r.n}</span></div>`)
+        .join("")}</div></section>`;
+  }
+
+  function errGroup(g, days) {
+    const withLaw = g.items.some((it) => it.law);
+    let law = null;
+    let rows = "";
+    for (const it of g.items) {
+      if (withLaw && it.law !== law) {
+        law = it.law;
+        rows += `<li class="err-law">${esc(law || "Sem etiqueta de lei")}</li>`;
+      }
+      rows += errItem(it);
+    }
+    const redo = g.did && g.available ? `<button class="btn small" data-act="err-redo" data-days="${days}" data-did="${g.did}">Refazer</button>` : "";
+    return `<section class="section err-group"><div class="section-head"><h2>${esc(g.name)}</h2><div class="head-actions"><span class="muted">${plural(g.items.length, "cartão", "cartões")}</span>${redo}</div></div>
+      <ul class="err-list">${rows}</ul></section>`;
+  }
+
+  function errItem(it) {
+    const reason = it.reason ? REASONS.find((r) => r[0] === it.reason) : null;
+    const meta = [it.n > 1 ? `errou ${it.n} vezes` : "errou 1 vez", `última: ${fmtWhen(it.last)}`, reason ? reason[1] : "", it.suspended ? "suspenso" : ""]
+      .filter(Boolean)
+      .join(" · ");
+    const trap = it.trap
+      ? ` <span class="trap-from">${esc(it.trap.from)}</span> <span class="trap-arrow" aria-label="na lei">→</span> <span class="trap-to">${esc(it.trap.to)}</span>`
+      : "";
+    return `<li class="err-item">
+      <button class="err-main" data-act="err-open" data-cid="${it.cid}" aria-expanded="false">
+        <span class="bubble wrong" aria-hidden="true"></span>
+        <span class="err-body"><span class="err-text">${esc(it.text)}</span><span class="err-meta">${esc(meta)}</span></span>
+      </button>
+      <div class="err-detail" hidden>
+        ${it.correct ? `<p class="err-gab">Gabarito: <strong>${esc(gabaritoWord(it.correct))}</strong>${trap ? `<span class="err-trap">${trap}</span>` : ""}</p>` : ""}
+        <div class="sheet err-sheet"></div>
+        <div class="actions"><button class="btn quiet" data-act="edit-card" data-cid="${it.cid}">Editar no Anki</button></div>
+      </div></li>`;
+  }
+
+  async function toggleErr(btn) {
+    const li = btn.closest(".err-item");
+    const detail = li.querySelector(".err-detail");
+    const open = btn.getAttribute("aria-expanded") === "true";
+    btn.setAttribute("aria-expanded", String(!open));
+    li.classList.toggle("open", !open);
+    detail.hidden = open;
+    if (open) return;
+    animate(detail, "rise");
+    if (detail.dataset.loaded) return;
+    detail.dataset.loaded = "1";
+    try {
+      const card = await api("erro_card", { cid: Number(btn.dataset.cid) });
+      mountFrame(detail.querySelector(".err-sheet"), card.back, card.css);
+    } catch (err) {
+      detail.dataset.loaded = "";
+    }
+  }
+
   // ---------------------------------------------------------------- roleta: data
   const roState = () => (S.ro ? S.ro.state : null);
   const subLabel = (s) => s.name || "Geral";
@@ -976,8 +1237,12 @@
     return null;
   }
 
+  const COUNT_CHANGES = /^roleta_(rename|add|import|save_cat|remove|clear|undo|link|delete_cat)$/;
+
   async function roCall(method, args = {}, opts = {}) {
+    if (COUNT_CHANGES.test(method)) S.roCounts = null;
     const res = await api(method, args, opts);
+    if (COUNT_CHANGES.test(method)) S.roCounts = null;
     if (res && res.state) S.ro = res;
     if (opts.refresh !== false && S.view === "roleta") refreshRoleta();
     if (res && res.toast) toast(res.toast, opts.undo ? { action: { label: "Desfazer", fn: roUndo } } : {});
@@ -1488,12 +1753,16 @@
     ]
       .map(([f, label]) => `<button class="${S.roFilter === f ? "on" : ""}" data-act="ro-filter" data-f="${f}">${label}</button>`)
       .join("");
+    const counts = S.roCounts && S.roCounts.cat === cat.id ? S.roCounts.counts : null;
+    if (!counts && cat.deck) loadCardCounts(cat.id);
     const rows = shown
       .map(
         ({ t, s }) => `<div class="ro-row">
           <button class="topic-toggle" data-act="ro-toggle" data-tid="${esc(t.id)}" aria-pressed="${!!t.seen}" title="${t.seen ? "Voltar ao sorteio" : "Marcar como visto"}"><span class="bubble ${t.seen ? "full" : ""}"></span></button>
-          <input class="ro-name" data-rename="${esc(t.id)}" value="${esc(t.t)}" aria-label="Nome do tópico" title="${esc(t.t)}" spellcheck="false">
-          ${sc.all ? `<span class="ro-meta">${esc(subLabel(s))}</span>` : ""}
+          <div class="ro-namebox"><input class="ro-name" data-rename="${esc(t.id)}" value="${esc(t.t)}" aria-label="Nome do tópico" title="${esc(t.t)}" spellcheck="false">${
+            sc.all ? `<span class="ro-sub">${esc(subLabel(s))}</span>` : ""
+          }</div>
+          ${cardsPill(counts, t)}
           <button class="icon-btn ${t.note ? "has" : ""}" data-act="ro-detail" data-tid="${esc(t.id)}" title="${t.note ? "Ver anotação" : "Anotar"}">${ICON.note}</button>
           <button class="icon-btn del" data-act="ro-remove" data-tid="${esc(t.id)}" title="Remover tópico">${ICON.trash}</button>
         </div>`
@@ -1528,11 +1797,12 @@
       ${!result ? `<p class="res-status">${f.topic.seen ? "Visto neste ciclo" + (when ? ", " + esc(when) : "") : "Pendente neste ciclo"}</p>` : ""}
       ${result && info.cycleDone ? `<p class="res-cycle">Ciclo concluído: todos os tópicos desta seleção já saíram. No próximo giro eles voltam ao sorteio.</p>` : ""}
       <label class="field note-field"><span>Anotação</span><textarea class="note" data-note="${esc(f.topic.id)}" rows="3" placeholder="Artigos, súmulas, pontos a revisar">${esc(f.topic.note || "")}</textarea></label>
+      <div class="topic-cards" id="topic-cards" aria-live="polite">${deck ? `<p class="muted small">Procurando os cartões deste tópico…</p>` : ""}</div>
       <div class="actions">
         <button class="btn primary" data-act="dlg-close">${result ? "Estudar" : "Fechar"}</button>
         ${result && !info.cycleDone ? `<button class="btn" data-act="ro-again" data-tid="${esc(f.topic.id)}">Sortear outro</button>` : ""}
         ${!result ? `<button class="btn" data-act="ro-toggle-dlg" data-tid="${esc(f.topic.id)}">${f.topic.seen ? "Voltar ao sorteio" : "Marcar como visto"}</button>` : ""}
-        ${deck ? `<button class="btn" data-act="study" data-did="${deck}">Estudar os cartões dessa matéria</button>` : ""}
+        <span class="topic-study" id="topic-study">${deck ? `<button class="btn" data-act="study" data-did="${deck}">Estudar os cartões dessa matéria</button>` : ""}</span>
       </div>
       <div class="res-foot"><button class="link danger" data-act="ro-remove-dlg" data-tid="${esc(f.topic.id)}">Remover tópico</button></div>
     </div>`);
@@ -1544,6 +1814,109 @@
       flushNote();
       if (S.view === "roleta") refreshRoleta();
     };
+    el._tid = f.topic.id;
+    loadTopicCards(el);
+  }
+
+  // ---------------------------------------------------------------- roleta: a topic's cards
+  async function loadTopicCards(el, opts = {}) {
+    let info;
+    try {
+      info = await api("roleta_topic_cards", { tid: el._tid, tags: !!opts.picker }, { quiet: true });
+    } catch (err) {
+      const box = el.querySelector("#topic-cards");
+      if (box) box.innerHTML = "";
+      return;
+    }
+    if (!el.isConnected) return;
+    el._cards = info;
+    renderTopicCards(el, opts);
+  }
+
+  function renderTopicCards(el, opts = {}) {
+    const box = el.querySelector("#topic-cards");
+    const slot = el.querySelector("#topic-study");
+    const info = el._cards;
+    if (!box || !slot || !info) return;
+    const n = info.count || 0;
+    slot.innerHTML = topicStudyButton(info, info.deck, info.tid);
+    const cards = (k) => plural(k, "cartão", "cartões");
+    const link = (act, label) => `<button class="link" data-act="${act}">${label}</button>`;
+    const pick = link("tc-pick", info.mode === "tag" ? "Mudar a etiqueta" : "Escolher uma etiqueta");
+    const suggestion = info.suggest
+      ? ` Sugestão: etiqueta ${esc(info.suggest.label)} (${cards(info.suggest.n)}). <button class="link" data-act="tc-use" data-tag="${esc(info.suggest.tag)}">Usar</button>`
+      : "";
+    let text = "";
+    let links = [];
+    if (info.mode === "nodeck") text = `<p class="muted small">Ligue esta matéria a um baralho em Organizar para estudar os cartões de cada tópico.</p>`;
+    else if (info.mode === "tag") {
+      text = `<p class="small">${cards(n)} pela etiqueta ${esc(info.tag_label)}.</p>`;
+      links = [pick, link("tc-auto", info.has_articles ? "Usar os artigos do nome" : "Desligar")];
+    } else if (info.mode === "articles" && info.ambiguous)
+      text = `<p class="small">Os ${esc(info.arts_text)} aparecem em mais de uma lei em ${esc(info.deck_name)}. De qual lei é este tópico?</p>
+        <div class="inline tc-row"><select class="select" id="tc-law" aria-label="Lei do tópico">${info.laws
+          .map((l) => `<option value="${esc(l.key)}">${esc(l.label)} (${cards(l.n)})</option>`)
+          .join("")}</select><button class="btn" data-act="tc-law">Usar esta lei</button></div>`;
+    else if (info.mode === "articles" && n) {
+      text = `<p class="small">${cards(n)} em ${esc(info.deck_name)} ${esc(info.arts_label)}${info.law_label ? `, ${esc(info.law_label)}` : ""}.</p>`;
+      links = info.chosen ? [link("tc-auto", "Trocar a lei"), pick] : [pick];
+    } else if (info.mode === "articles") {
+      text = `<p class="muted small">Nenhum cartão em ${esc(info.deck_name)} ${esc(info.arts_label)}.${suggestion}</p>`;
+      links = [pick];
+    } else {
+      text = `<p class="muted small">O nome deste tópico não traz artigos.${suggestion}</p>`;
+      links = [pick];
+    }
+    let html = text + (links.length && !opts.picker ? `<div class="tc-links">${links.join("")}</div>` : "");
+    if (opts.picker && info.tags) {
+      const current = info.mode === "tag" ? info.tag : info.suggest ? info.suggest.tag : "";
+      html += info.tags.length
+        ? `<div class="inline tc-row"><select class="select" id="tc-tag" aria-label="Etiqueta dos cartões">${info.tags
+            .map((t) => `<option value="${esc(t.tag)}" ${t.tag === current ? "selected" : ""}>${esc(t.label)} (${t.n})</option>`)
+            .join("")}</select><button class="btn" data-act="tc-tag">Usar esta etiqueta</button><button class="btn quiet" data-act="tc-cancel">Cancelar</button></div>`
+        : `<p class="muted small">Os cartões de ${esc(info.deck_name)} não têm etiquetas.</p>`;
+    }
+    box.innerHTML = html;
+    if (opts.picker) {
+      const select = box.querySelector("#tc-tag");
+      if (select) select.focus();
+    }
+  }
+
+  async function linkTopic(el, link) {
+    let res;
+    try {
+      res = await roCall("roleta_link", { tid: el._tid, link }, { refresh: false });
+    } catch (err) {
+      return;
+    }
+    if (!el.isConnected) return;
+    el._cards = res.cards;
+    renderTopicCards(el);
+    play("mark");
+  }
+
+  let countsLoading = null;
+  function loadCardCounts(catId) {
+    if (countsLoading === catId) return;
+    countsLoading = catId;
+    api("roleta_card_counts", { cat: catId }, { quiet: true })
+      .then((res) => {
+        S.roCounts = res;
+        const cat = roCat();
+        if (S.view === "roleta" && S.roTab === "list" && cat && cat.id === res.cat) renderPanel();
+      })
+      .catch(() => {})
+      .finally(() => {
+        countsLoading = null;
+      });
+  }
+
+  function cardsPill(counts, t) {
+    const c = counts && counts[t.id];
+    if (!c) return "";
+    if (c.ambiguous) return `<span class="ro-cards amb" title="Esses artigos aparecem em mais de uma lei: escolha a lei no tópico">?</span>`;
+    return `<span class="ro-cards ${c.n ? "" : "zero"}" title="${c.n ? plural(c.n, "cartão", "cartões") + " no Anki" : "Nenhum cartão no Anki para este tópico"}">${c.n}</span>`;
   }
 
   let noteTimer = null;
@@ -1743,6 +2116,11 @@ Regência verbal`;
     suspend: () => cardAction("suspend"),
     undo: () => cardAction("undo"),
     replay: () => api("replay").catch(() => {}),
+    reason: (t) => setReason(t.dataset.code),
+    "edit-card": (t) => api("edit", { cid: Number(t.dataset.cid) }).catch(() => {}),
+    "err-days": (t) => go("erros", { days: Number(t.dataset.days) }),
+    "err-redo": (t) => studyErrors(Number(t.dataset.days), t.dataset.did ? Number(t.dataset.did) : null),
+    "err-open": (t) => toggleErr(t),
     "save-settings": () => saveSettings(),
     "toggle-sound": () =>
       setFx({ sound: !S.fx.sound })
@@ -1777,6 +2155,21 @@ Regência verbal`;
       renderPanel();
     },
     "ro-detail": (t) => openTopicDialog(t.dataset.tid, "detail"),
+    "ro-study-topic": (t) => studyTopic(t.dataset.tid),
+    "tc-pick": (t) => loadTopicCards(topOverlay(t), { picker: true }),
+    "tc-cancel": (t) => renderTopicCards(topOverlay(t)),
+    "tc-tag": (t) => {
+      const el = topOverlay(t);
+      const select = el.querySelector("#tc-tag");
+      if (select && select.value) linkTopic(el, { tag: select.value });
+    },
+    "tc-use": (t) => linkTopic(topOverlay(t), { tag: t.dataset.tag }),
+    "tc-law": (t) => {
+      const el = topOverlay(t);
+      const select = el.querySelector("#tc-law");
+      if (select && select.value) linkTopic(el, { law: select.value });
+    },
+    "tc-auto": (t) => linkTopic(topOverlay(t), null),
     "ro-toggle": (t) =>
       roCall("roleta_toggle", { tid: t.dataset.tid })
         .then((res) => {
@@ -2011,9 +2404,16 @@ Regência verbal`;
           ev.preventDefault();
           return rate(3);
         }
-      } else if (go3 || k === "1") {
-        ev.preventDefault();
-        return rate(1);
+      } else {
+        const reason = REASONS.find((r) => r[2] === k);
+        if (reason) {
+          ev.preventDefault();
+          return setReason(reason[0]);
+        }
+        if (go3 || k === "1") {
+          ev.preventDefault();
+          return rate(1);
+        }
       }
     }
   });
@@ -2031,6 +2431,7 @@ Regência verbal`;
         if (button) button.textContent = S.syncing ? "Sincronizando…" : "Sincronizar";
         if (!S.syncing && S.view !== "study") rerender();
       } else if (e.type === "changed") {
+        S.roCounts = null;
         if (S.view === "study") {
           if (e.note_text) rerender();
         } else if (S.view !== "done" && S.view !== "roleta") rerender();
@@ -2039,7 +2440,8 @@ Regência verbal`;
       }
     },
     go,
-    state: () => ({ view: S.view, phase: S.phase, mode: S.card && S.card.mode, spinning: !!WHEEL.spin, overlays: overlays.length }),
+    state: () => ({ view: S.view, phase: S.phase, mode: S.card && S.card.mode, spinning: !!WHEEL.spin, overlays: overlays.length, reason: S.reason, deck: S.card && S.card.deck }),
+    topic: (tid) => openTopicDialog(tid, "detail"),
     renderSound,
     sounds: () => Object.keys(SOUNDS),
   };

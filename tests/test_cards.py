@@ -129,3 +129,20 @@ def test_audio_markers_and_type_fields_are_removed():
     q = STYLE + "Ouça [anki:play:q:0] e digite [[type:Back]]"
     p = cards.parse(q, q + "<hr id=answer>resposta")
     assert "[anki:play" not in p.front and "[[type:" not in p.front
+
+
+def test_trap_of_errado_items():
+    q, a = render(CE_ERRADO_FRONT, CE_ERRADO_BACK)
+    parsed = cards.parse(q, a)
+    assert parsed.trap == ("metade", "1/3 (um terço)")
+    q, a = render(CE_CERTO_FRONT, CE_CERTO_BACK)
+    assert cards.parse(q, a).trap is None
+    assert cards.trap_of("🔁 15 (quinze) dias → <b>05 (cinco) dias</b><br><br>Com o réu preso") == ("15 (quinze) dias", "05 (cinco) dias")
+    assert cards.trap_of("sem linha de correção") is None
+
+
+def test_gabarito_of_back():
+    assert cards.gabarito_of(CE_ERRADO_BACK) == "ERRADO"
+    assert cards.gabarito_of(CE_CERTO_BACK) == "CERTO"
+    assert cards.gabarito_of("<b>Gabarito: B</b><br><br>A conduta...") == "B"
+    assert cards.gabarito_of("10 anos (art. 205 do CC)") is None

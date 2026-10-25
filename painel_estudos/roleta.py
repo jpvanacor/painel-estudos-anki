@@ -9,7 +9,8 @@ the panel's backups open in the app:
 ``seen`` is the moment (ms) a topic was drawn in the current cycle, or None. A cycle belongs to
 the selection being spun (a subcategory, or all of a matéria): when every topic there has been
 drawn, the next spin puts them all back. The panel adds the Anki deck of each matéria
-(``deck``, ``deck_manual``) and how many times each topic was drawn (``times``).
+(``deck``, ``deck_manual``), how many times each topic was drawn (``times``) and, when the person
+set it, how to find a topic's cards (``cards``: a law or a tag, see topics.py).
 
 No Anki imports here, so this module is tested on its own.
 """
@@ -81,6 +82,17 @@ def new_topic(text: str) -> dict:
     return {"id": uid(), "t": text, "seen": None, "note": "", "times": 0}
 
 
+def clean_link(link: Any) -> dict | None:
+    """How a topic finds its cards, when the person chose: {"tag": ...} or {"law": ...}."""
+    if not isinstance(link, dict):
+        return None
+    for key in ("tag", "law"):
+        value = link.get(key)
+        if isinstance(value, str) and value.strip() and len(value) <= 300:
+            return {key: value.strip()}
+    return None
+
+
 def sanitize_cats(arr: Any) -> list[dict]:
     """Cleans cats from storage or a backup: unique ids, trimmed names, no repeated topics."""
     ids: set[str] = set()
@@ -121,15 +133,17 @@ def sanitize_cats(arr: Any) -> list[dict]:
                 td = t if isinstance(t, dict) else {}
                 seen = td.get("seen")
                 times = td.get("times")
-                sub["topics"].append(
-                    {
-                        "id": fresh(td.get("id")),
-                        "t": text,
-                        "seen": seen if isinstance(seen, (int, float)) and not isinstance(seen, bool) and seen > 0 else None,
-                        "note": td.get("note") if isinstance(td.get("note"), str) else "",
-                        "times": int(times) if isinstance(times, int) and not isinstance(times, bool) and times > 0 else 0,
-                    }
-                )
+                topic = {
+                    "id": fresh(td.get("id")),
+                    "t": text,
+                    "seen": seen if isinstance(seen, (int, float)) and not isinstance(seen, bool) and seen > 0 else None,
+                    "note": td.get("note") if isinstance(td.get("note"), str) else "",
+                    "times": int(times) if isinstance(times, int) and not isinstance(times, bool) and times > 0 else 0,
+                }
+                link = clean_link(td.get("cards"))
+                if link:
+                    topic["cards"] = link
+                sub["topics"].append(topic)
             cat["subs"].append(sub)
         if not cat["subs"]:
             cat["subs"].append({"id": fresh(), "name": "", "topics": []})
@@ -362,6 +376,18 @@ def set_note(state: Roleta, tid: str, note: str) -> None:
     found = find_topic(state, tid)
     if found:
         found[2]["note"] = str(note or "")
+
+
+def set_cards_link(state: Roleta, tid: str, link: Any) -> None:
+    found = find_topic(state, tid)
+    if not found:
+        raise RoletaError("Esse tópico não existe mais.")
+    topic = found[2]
+    clean = clean_link(link)
+    if clean:
+        topic["cards"] = clean
+    else:
+        topic.pop("cards", None)
 
 
 def rename_topic(state: Roleta, tid: str, value: str) -> str:

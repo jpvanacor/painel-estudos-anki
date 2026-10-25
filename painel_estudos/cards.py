@@ -32,6 +32,8 @@ CE_LINE_RE = re.compile(
 CE_ANSWER_RE = re.compile(r"^[\W_]*(?:gabarito\s*[:\-]?\s*)?(certo|errado)\b", re.I)
 MC_ANSWER_RE = re.compile(r"gabarito\s*[:\-]?\s*(?:letra\s+)?\(?([A-E])\)?(?![\w])", re.I)
 ALT_RE = re.compile(r"^\s*(?:<[^>]+>\s*)*\(?([A-Ea-e])\s*\)\s*(?:</[^>]+>\s*)*(.*)$", re.S)
+# The line of an ERRADO item that names the change: "🔁 metade → <b>1/3 (um terço)</b>"
+TRAP_RE = re.compile(r"\U0001F501\ufe0f?\s*(.+?)\s*(?:→|->|⟶)\s*(.+?)(?:<br\s*/?>|</p>|</div>|$)", re.S | re.I)
 
 LETTERS = "ABCDE"
 
@@ -45,6 +47,7 @@ class ParsedCard:
     answer_full: str = ""  # the whole answer side, for normal cards
     correct: str | None = None  # "CERTO", "ERRADO" or a letter
     options: list[tuple[str, str]] = field(default_factory=list)
+    trap: tuple[str, str] | None = None  # (as written in the statement, what the law says)
 
     def check(self, choice: str) -> bool:
         return self.correct is not None and choice.strip().upper() == self.correct
@@ -66,6 +69,25 @@ def split_styles(rendered: str) -> tuple[str, str]:
 def clean(rendered: str) -> str:
     """Removes Anki's audio markers and type-in fields, which this interface draws itself."""
     return TYPE_ANS_RE.sub("", AV_REF_RE.sub("", rendered))
+
+
+def trap_of(back_html: str) -> tuple[str, str] | None:
+    """The "🔁 X → Y" line of an ERRADO item: X as written in the statement, Y as in the law."""
+    match = TRAP_RE.search(back_html or "")
+    if not match:
+        return None
+    wrong, right = text_of(match.group(1)), text_of(match.group(2))
+    return (wrong, right) if wrong and right else None
+
+
+def gabarito_of(back_html: str) -> str | None:
+    """"CERTO", "ERRADO" or the letter of a question, read from the back of a card."""
+    text = text_of(back_html or "")
+    ce = CE_ANSWER_RE.match(text)
+    if ce:
+        return ce.group(1).upper()
+    mc = MC_ANSWER_RE.search(text[:200])
+    return mc.group(1).upper() if mc else None
 
 
 def back_part(answer_body: str) -> str:
@@ -135,6 +157,7 @@ def parse(question_html: str, answer_html: str) -> ParsedCard:
             back=back,
             answer_full=CE_LINE_RE.sub("", a_body),
             correct=ce.group(1).upper(),
+            trap=trap_of(back) if ce.group(1).upper() == "ERRADO" else None,
         )
 
     mc = MC_ANSWER_RE.search(back_text[:200])

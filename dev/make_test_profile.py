@@ -64,6 +64,17 @@ cards = {
             "<b>❌ ERRADO</b><br><br>🔁 fica excluída → <b>não exclui a imputabilidade</b><br><br>A embriaguez voluntária ou culposa não exclui a imputabilidade penal: Pedro responde pela agressão.<br><br>📎 Art. 28, II, CP: <i>\"Não excluem a imputabilidade penal: (...) II – a embriaguez, voluntária ou culposa, pelo álcool ou substância de efeitos análogos.\"</i>",
             IMPUTAB,
         ),
+        # two laws with an art. 33 in the same deck, for the Roleta's "which law" choice
+        (
+            "[Art. 33, §2º, a] O condenado a pena superior a 08 (oito) anos deverá começar a cumpri-la em regime fechado." + CE,
+            "<b>✅ CERTO</b><br><br>Pena acima de 08 (oito) anos começa no <b>regime fechado</b>.<br><br>📎 Art. 33, §2º, a, CP: <i>\"o condenado a pena superior a 8 (oito) anos deverá começar a cumpri-la em regime fechado\"</i>",
+            "direito_penal::CP::parte_geral::titulo_V::penas",
+        ),
+        (
+            "[Art. 33, caput] Na Lei de Drogas, o tráfico é punido com detenção de 05 (cinco) a 15 (quinze) anos." + CE,
+            "<b>❌ ERRADO</b><br><br>🔁 detenção → <b>reclusão</b><br><br>O tráfico de drogas é punido com reclusão de 05 (cinco) a 15 (quinze) anos e multa.<br><br>📎 Art. 33, caput, Lei 11.343/2006: <i>\"Pena – reclusão de 5 (cinco) a 15 (quinze) anos e pagamento de 500 (quinhentos) a 1.500 (mil e quinhentos) dias-multa.\"</i>",
+            "direito_penal::lei_11343::crimes",
+        ),
     ],
     "Processo Penal": [
         (
@@ -110,7 +121,13 @@ col.sched.set_due_date(review_cids, "0")
 
 # Past answers: accuracy differs per tag, so the weak spots and the order of the plan show up.
 rng = random.Random(4)
-accuracy_by_tag = {PATRIMONIO: 0.52, PESSOA: 0.86, IMPUTAB: 0.6}
+accuracy_by_tag = {
+    PATRIMONIO: 0.52,
+    PESSOA: 0.86,
+    IMPUTAB: 0.6,
+    "direito_penal::CP::parte_geral::titulo_V::penas": 0.5,
+    "direito_penal::lei_11343::crimes": 0.55,
+}
 day_start = col.sched.day_cutoff - 86400
 rows = []
 rid = (day_start - 30 * 86400) * 1000

@@ -107,6 +107,40 @@ def roleta_state(label):
     log(f"{label}: cats={cats} last={state.get('last')} notes={notes}")
 
 
+STATE = {}
+
+
+def topic_step():
+    """In a topic session: answers right until an ERRADO card shows up, then misses it once."""
+    api = mw.painel_estudos.api
+    if not api.card or not api.parsed:
+        return
+    if api.phase == "question":
+        if api.parsed.mode == "ce" and api.parsed.correct == "ERRADO" and not STATE.get("trap"):
+            STATE["trap"] = True
+            answer(False)
+        else:
+            answer(True)
+    elif api.phase == "result" and api.result and api.result["right"]:
+        key("3")
+
+
+def temp_deck_state(label):
+    col = mw.col
+    did = col.decks.id_for_name("Painel de Estudos (sessão)")
+    cards = len(col.find_cards(f"did:{did}")) if did else 0
+    log(f"{label}: temp deck {'present' if did else 'gone'}, {cards} cards in it, current deck {col.decks.name(col.decks.get_current_id())}")
+
+
+def reasons_state(label):
+    reasons = mw.painel_estudos.api._data()["reasons"]
+    log(f"{label}: {sorted(reasons.values())}")
+
+
+def pick_cat(cat_id):
+    js(f"(function(){{var s=document.querySelector('[data-ro-cat]'); s.value={json.dumps(cat_id)}; s.dispatchEvent(new Event('change',{{bubbles:true}}));}})()")
+
+
 def render_sounds():
     js("Promise.all(PE.sounds().map(function(n){return PE.renderSound(n, 3);})).then(function(r){window.__sfx=r;})")
 
@@ -181,6 +215,54 @@ STEPS = [
     (lambda: click('[data-act="ro-org"]'), 1000),
     (lambda: shot("19_organizar"), 300),
     (lambda: key("Escape"), 800),
+    # a topic's cards: counts in the Tópicos list, then a topic found by the articles in its name
+    (lambda: js("var s=document.getElementById('ro-search'); s.value=''; s.dispatchEvent(new Event('input',{bubbles:true}));"), 600),
+    (lambda: click('[data-act="ro-sel"][data-sel="_all"]'), 1600),
+    (lambda: shot("23_topicos_contagem"), 300),
+    (lambda: js("PE.topic('t7')"), 1500),
+    (lambda: shot("24_topico_cartoes"), 300),
+    (lambda: click('[data-act="ro-study-topic"]'), 2200),
+    (lambda: report("topic session"), 200),
+    (lambda: temp_deck_state("during topic session"), 200),
+    (topic_step, 1600),
+    (topic_step, 1600),
+    (topic_step, 1600),
+    (lambda: shot("25_pegadinha"), 300),
+    (lambda: key("p"), 700),
+    (lambda: shot("26_motivo"), 300),
+    (lambda: key(" "), 1600),
+    *[(topic_step, 1000) for _ in range(18)],
+    (lambda: report("after the topic's last card"), 200),
+    (lambda: shot("26b_topico_fim"), 300),
+    (lambda: temp_deck_state("after topic session"), 200),
+    (lambda: click('.done [data-go="roleta"]'), 1800),
+    (lambda: reasons_state("reasons saved"), 200),
+    # two laws with an art. 33 in the deck: the topic asks which one
+    (lambda: js("PE.topic('t5')"), 1500),
+    (lambda: shot("27_lei_ambigua"), 300),
+    (lambda: click('[data-act="tc-law"]'), 1500),
+    (lambda: shot("28_lei_escolhida"), 300),
+    (lambda: key("Escape"), 800),
+    # a topic without articles: the tag with the same words is suggested
+    (lambda: pick_cat("c-adm"), 1500),
+    (lambda: js("PE.topic('a5')"), 1500),
+    (lambda: shot("29_sugestao_etiqueta"), 300),
+    (lambda: click('[data-act="tc-use"]'), 1500),
+    (lambda: shot("30_etiqueta_ligada"), 300),
+    (lambda: key("Escape"), 800),
+    # caderno de erros
+    (lambda: js("PE.go('erros')"), 2200),
+    (lambda: shot("31_caderno"), 300),
+    (lambda: click('[data-act="err-open"]'), 1600),
+    (lambda: shot("32_caderno_aberto"), 300),
+    (lambda: click('[data-act="err-days"][data-days="30"]'), 1800),
+    (lambda: click('[data-act="err-redo"]'), 2200),
+    (lambda: report("errors session"), 200),
+    (lambda: shot("33_refazer_erros"), 300),
+    (lambda: click('[data-act="end"]'), 2000),
+    (lambda: report("after ending the errors session"), 200),
+    (lambda: temp_deck_state("after errors session"), 200),
+    (lambda: js("PE.go('roleta')"), 1800),
     # sounds rendered offline and measured
     (render_sounds, 2500),
     (lambda: report("sounds", "JSON.stringify(window.__sfx)"), 600),
@@ -194,6 +276,8 @@ STEPS = [
     (lambda: shot("21_hoje_escuro"), 300),
     (lambda: js("var m=document.getElementById('main'); m.scrollTop = m.scrollHeight;"), 500),
     (lambda: shot("21b_hoje_roleta_escuro"), 300),
+    (lambda: js("PE.go('erros')"), 1800),
+    (lambda: shot("21c_caderno_escuro"), 300),
     (lambda: theme(False), 2000),
     (lambda: click('[data-go="ajustes"]'), 1600),
     (lambda: js("window.scrollTo(0,0); var m=document.getElementById('main'); m.scrollTop = m.scrollHeight;"), 600),

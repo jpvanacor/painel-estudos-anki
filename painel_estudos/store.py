@@ -15,7 +15,19 @@ DEFAULTS: dict[str, Any] = {
     "root": None,  # deck whose children are the matérias; None = automatic
     "fx": {"sound": True, "volume": 0.7, "motion": True},
     "roleta": None,
+    "reasons": {},  # why a card was missed: review log id (ms, as text) -> reason code
 }
+
+REASONS = {"nao_sabia": "Não sabia", "confundi": "Confundi", "atencao": "Falta de atenção", "pegadinha": "Pegadinha"}
+KEEP_REASONS_MS = 400 * 86400 * 1000
+
+
+def clean_reasons(raw: Any, now_ms: int | None = None) -> dict[str, str]:
+    """Known reasons only, for review log entries of the last 400 days."""
+    if not isinstance(raw, dict):
+        return {}
+    oldest = (now_ms or ro.now_ms()) - KEEP_REASONS_MS
+    return {k: v for k, v in raw.items() if isinstance(k, str) and k.isdigit() and int(k) >= oldest and v in REASONS}
 
 
 def load(col) -> dict[str, Any]:
@@ -25,6 +37,7 @@ def load(col) -> dict[str, Any]:
     merged.update({k: v for k, v in data.items() if k in DEFAULTS})
     merged["goal"] = {**DEFAULTS["goal"], **(data.get("goal") or {})}
     merged["fx"] = {**DEFAULTS["fx"], **(data.get("fx") or {})}
+    merged["reasons"] = clean_reasons(data.get("reasons"))
     if isinstance(data.get("roleta"), dict):
         merged["roleta"] = ro.load(data["roleta"])
         merged["_converted"] = False

@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import copy
 import time
+from collections import Counter
 from typing import Any, Callable
 
 from anki.cards import Card
 from anki.collection import SearchNode
+from anki.decks import DeckId, FilteredDeckConfig
+from anki.errors import FilteredDeckError
 from anki.scheduler.v3 import CardAnswer
+from anki.utils import ids2str
 from aqt import dialogs, mw
 from aqt.qt import QApplication, QFileDialog
 from aqt.sound import av_player
@@ -16,10 +20,14 @@ from aqt.theme import theme_manager
 
 from . import cards as cardfmt
 from . import roleta as ro
-from . import stats, store
+from . import stats, store, topics
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 RATINGS = {1: CardAnswer.AGAIN, 2: CardAnswer.HARD, 3: CardAnswer.GOOD, 4: CardAnswer.EASY}
+# Topic and error sessions run in a filtered deck of their own, emptied and removed at the end.
+TEMP_DECK = "Painel de Estudos (sessão)"
+ORDER = FilteredDeckConfig.SearchTerm.Order
+ERROR_DAYS = (1, 7, 30)
 _BIDI = dict.fromkeys(map(ord, "⁨⁩"), None)
 WEEKDAYS = ["segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado", "domingo"]
 MONTHS = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"]
@@ -41,6 +49,7 @@ class Api:
         self.queue_counts = (0, 0, 0)
         self.goal_flag = False
         self.ro_undo: dict | None = None  # the Roleta before its last destructive change
+        self._home_deck: int | None = None  # Anki's current deck before a topic or error session
 
     @property
     def col(self):
@@ -49,6 +58,9 @@ class Api:
     # ------------------------------------------------------------------ general
     def boot(self) -> dict:
         data = self._data()
+        self.session = None
+        self.card = None
+        self._drop_temp()  # left over if Anki closed during a topic or error session
         return {
             "base": mw.serverURL(),
             "night": theme_manager.night_mode,
@@ -102,17 +114,31 @@ class Api:
             "plan": plan,
             "due": due,
             "eta_min": round(due * progress["avg_secs"] / 60),
-            "roleta": self._roleta_summary(state),
+            "roleta": self._roleta_summary(data),
+            "erros7": self._missed_cards(7),
         }
 
-    @staticmethod
-    def _roleta_summary(state: dict) -> dict:
+    def _missed_cards(self, days: int) -> int:
+        since = (int(self.col.sched.day_cutoff) - days * stats.DAY) * 1000
+        return int(self.col.db.scalar("select count(distinct cid) from revlog where ease = 1 and id >= ?", since) or 0)
+
+    def _roleta_summary(self, data: dict) -> dict:
+        state = data["roleta"]
         cat = ro.cur_cat(state)
         found = ro.find_topic(state, state.get("last"))
         last = None
         if found:
             c, sub, topic, _i = found
-            last = {"t": topic["t"], "path": ro.path_of(c, sub), "note": topic.get("note") or "", "seen": topic.get("seen"), "deck": c.get("deck"), "cat": c["id"]}
+            last = {
+                "id": topic["id"],
+                "t": topic["t"],
+                "path": ro.path_of(c, sub),
+                "note": topic.get("note") or "",
+                "seen": topic.get("seen"),
+                "deck": c.get("deck"),
+                "cat": c["id"],
+                "cards": self._topic_info(data, topic["id"]),
+            }
         return {
             "has": bool(state["cats"]),
             "cat": cat["name"] if cat else None,
@@ -124,26 +150,74 @@ class Api:
     # ------------------------------------------------------------------ estudo
     def start(self, did: int | None = None) -> dict:
         data = self._data()
+        self._drop_temp()
         if did:
             decks = [int(did)]
         else:
             decks = [row["did"] for row in stats.plan(self.col, data.get("root")) if row["due"] > 0]
-        self.session = {
+        self.session = self._new_session(decks, single=bool(did))
+        return self._next()
+
+    @staticmethod
+    def _new_session(decks: list[int], single: bool, **extra: Any) -> dict:
+        return {
             "decks": decks,
             "i": 0,
-            "single": bool(did),
+            "single": single,
             "answered": 0,
             "right": 0,
             "started": time.time(),
             "actions": [],
+            "title": None,  # shown instead of the deck name (topic and error sessions)
+            "kind": None,  # None, "topic" or "errors"
+            **extra,
         }
-        return self._next()
 
     def stop(self) -> dict:
         av_player.stop_and_clear_queue()
         self.session = None
         self.card = None
+        try:
+            self._drop_temp()
+        except Exception:  # the collection may be closing
+            pass
         return {"ok": True}
+
+    # ------------------------------------------------------------------ sessions on chosen cards
+    def _drop_temp(self) -> None:
+        """Empties and removes the panel's filtered deck; its cards go back to their decks."""
+        did = self.col.decks.id_for_name(TEMP_DECK)
+        if not did or not self.col.decks.is_filtered(did):
+            return
+        self.col.sched.empty_filtered_deck(did)
+        self.col.decks.remove([did])
+        home = self._home_deck
+        self._home_deck = None
+        if home and self.col.decks.get(home, default=False):
+            self.col.decks.select(DeckId(home))
+
+    def _build_temp(self, search: str, limit: int, order: int) -> int:
+        self._drop_temp()
+        current = int(self.col.decks.get_current_id())
+        self._home_deck = None if self.col.decks.is_filtered(current) else current
+        deck = self.col.sched.get_or_create_filtered_deck(deck_id=DeckId(0))
+        deck.name = TEMP_DECK
+        deck.config.reschedule = True  # answers count as normal reviews
+        del deck.config.search_terms[:]
+        deck.config.search_terms.append(FilteredDeckConfig.SearchTerm(search=search, limit=max(1, min(int(limit), 9999)), order=order))
+        try:
+            return int(self.col.sched.add_or_update_filtered_deck(deck).id)
+        except FilteredDeckError as err:
+            self._home_deck = None
+            raise UserError("Nenhum desses cartões pode ser estudado agora: estão suspensos, enterrados ou em outro baralho filtrado.") from err
+
+    def _start_temp(self, search: str, limit: int, order: int, title: str, kind: str, **extra: Any) -> dict:
+        av_player.stop_and_clear_queue()
+        self.session = None
+        self.card = None
+        did = self._build_temp(search, limit, order)
+        self.session = self._new_session([did], single=True, title=title, kind=kind, **extra)
+        return self._next()
 
     def _prep(self, rendered: str) -> str:
         return self.col.media.escape_media_filenames(rendered)
@@ -177,6 +251,8 @@ class Api:
 
     def _deck_label(self) -> str:
         assert self.card
+        if self.session and self.session.get("title"):
+            return self.session["title"]
         name = self.col.decks.name(self.card.current_deck_id())
         session_root = self.col.decks.name(self.session["decks"][self.session["i"]]) if self.session else name
         root_leaf = stats.leaf(session_root)
@@ -251,12 +327,14 @@ class Api:
 
     def _result_payload(self) -> dict:
         assert self.parsed and self.result
+        trap = self.parsed.trap
         return {
             "right": self.result["right"],
             "choice": self.result["choice"],
             "correct": self.parsed.correct,
             "back": self.parsed.back,
             "labels": self._labels(),
+            "trap": {"from": trap[0], "to": trap[1]} if trap else None,
         }
 
     def reveal(self) -> dict:
@@ -275,7 +353,8 @@ class Api:
             self._autoplay("a")
         return self._result_payload()
 
-    def answer(self, rating: int) -> dict:
+    def answer(self, rating: int, reason: str | None = None) -> dict:
+        """reason: why a Certo/Errado or question card was missed (store.REASONS), optional."""
         if not self.card or not self.parsed or not self.session:
             return self._next()
         rating = int(rating)
@@ -288,15 +367,24 @@ class Api:
             if self.phase != "answer":
                 raise UserError("Mostre a resposta antes.")
             right = rating > 1
-        goal = self._data()["goal"]
+        data = self._data()
+        goal = data["goal"]
         before = self._goal_done(goal)
+        cid = self.card.id
         answer = self.col.sched.build_answer(card=self.card, states=self.states, rating=RATINGS[rating])
         self.col.sched.answer_card(answer)
         after = self._goal_done(goal)
         self.goal_flag = before < goal["value"] <= after
+        action = {"kind": "answer", "right": right, "cid": cid, "i": self.session["i"]}
+        if not right and reason in store.REASONS:
+            rid = self.col.db.scalar("select max(id) from revlog where cid = ?", cid)
+            if rid:
+                data["reasons"][str(rid)] = reason
+                self._save(data)
+                action["rid"] = str(rid)
         self.session["answered"] += 1
         self.session["right"] += int(right)
-        self.session["actions"].append({"kind": "answer", "right": right, "cid": self.card.id, "i": self.session["i"]})
+        self.session["actions"].append(action)
         self.card = None
         return self._next()
 
@@ -326,6 +414,10 @@ class Api:
         if action["kind"] == "answer":
             session["answered"] -= 1
             session["right"] -= int(action["right"])
+            if action.get("rid"):
+                data = self._data()
+                if data["reasons"].pop(action["rid"], None):
+                    self._save(data)
         session["i"] = action["i"]
         return self._next(prefer_card=action["cid"])
 
@@ -335,24 +427,29 @@ class Api:
             av_player.play_tags(tags or self.card.question_av_tags())
         return {"ok": True}
 
-    def edit(self) -> dict:
-        if self.card:
-            dialogs.open("Browser", mw, search=(f"cid:{self.card.id}",))
+    def edit(self, cid: int | None = None) -> dict:
+        target = int(cid) if cid else (self.card.id if self.card else None)
+        if target:
+            dialogs.open("Browser", mw, search=(f"cid:{target}",))
         return {"ok": True}
 
     def _finish(self) -> dict:
         session = self.session or {}
         self.card = None
         minutes = (time.time() - session.get("started", time.time())) / 60
-        name = None
-        if session.get("single") and session.get("decks"):
+        name = session.get("title")
+        if not name and session.get("single") and session.get("decks"):
             name = stats.leaf(self.col.decks.name(session["decks"][0]))
+        if session.get("kind"):
+            self._drop_temp()
         return {
             "view": "done",
             "answered": session.get("answered", 0),
             "right": session.get("right", 0),
             "minutes": round(minutes),
             "deck": name,
+            "kind": session.get("kind"),
+            "days": session.get("days"),
             "results": [a["right"] for a in session.get("actions", []) if a["kind"] == "answer"],
             "session": self._session_info(),
         }
@@ -407,6 +504,188 @@ class Api:
             "weak": stats.weak_tags(self.col, dids),
             "roleta": {"cat": cat, "counts": ro.counts(cat["subs"]), "named": ro.has_named_subs(cat)} if cat else None,
         }
+
+    # ------------------------------------------------------------------ caderno de erros
+    def erros(self, days: int = 7) -> dict:
+        """Cards answered wrong (De novo) in the last days, by matéria and law."""
+        days = int(days) if int(days) in ERROR_DAYS else 7
+        since = (int(self.col.sched.day_cutoff) - days * stats.DAY) * 1000
+        data = self._data()
+        reasons = data["reasons"]
+        misses: dict[int, dict] = {}
+        tally: Counter = Counter()
+        for rid, cid in self.col.db.all("select id, cid from revlog where ease = 1 and id >= ? order by id", since):
+            entry = misses.setdefault(cid, {"n": 0, "last": 0, "reason": None})
+            entry["n"] += 1
+            entry["last"] = rid
+            reason = reasons.get(str(rid))
+            if reason:
+                entry["reason"] = reason
+            tally[reason or "none"] += 1
+        temp = self.col.decks.id_for_name(TEMP_DECK)
+        home_of: dict[int, tuple[int, str]] = {}
+        for name, mdid in self._matters(data):
+            for did in stats.subtree(self.col, mdid):
+                home_of[did] = (mdid, name)
+        groups: dict[int, dict] = {}
+        available = 0
+        if misses:
+            rows = self.col.db.all(
+                "select c.id, c.did, c.odid, c.queue, n.flds, n.tags from cards c join notes n on n.id = c.nid "
+                f"where c.id in {ids2str(misses)}"
+            )
+            for cid, did, odid, queue, flds, tags in rows:
+                fields = flds.split("\x1f")
+                front, back = fields[0], (fields[1] if len(fields) > 1 else "")
+                mdid, mname = home_of.get(odid or did, (0, "Outros baralhos"))
+                law = topics.law_of_tags(tags)
+                arts = topics.card_articles(front)
+                trap = cardfmt.trap_of(back)
+                ok = queue >= 0 and (not odid or did == temp)
+                available += int(ok)
+                miss = misses[cid]
+                group = groups.setdefault(mdid, {"did": mdid, "name": mname, "items": [], "available": 0})
+                group["available"] += int(ok)
+                group["items"].append(
+                    {
+                        "cid": cid,
+                        "text": topics.statement(front)[:400],
+                        "n": miss["n"],
+                        "last": miss["last"],
+                        "reason": miss["reason"],
+                        "law": law[1] if law else "",
+                        "art": arts[0][0] if arts else None,
+                        "correct": cardfmt.gabarito_of(back),
+                        "trap": {"from": trap[0], "to": trap[1]} if trap else None,
+                        "ok": ok,
+                        "suspended": queue == -1,
+                    }
+                )
+        for group in groups.values():
+            group["items"].sort(key=lambda it: (it["law"].lower(), it["art"] if it["art"] is not None else 10**9, -it["n"]))
+        ordered = sorted(groups.values(), key=lambda g: (g["did"] == 0, -len(g["items"]), g["name"].lower()))
+        return {
+            "days": days,
+            "misses": sum(m["n"] for m in misses.values()),
+            "cards": len(misses),
+            "available": available,
+            "reasons": [{"code": code, "label": label, "n": tally.get(code, 0)} for code, label in store.REASONS.items()],
+            "no_reason": tally.get("none", 0),
+            "groups": ordered,
+        }
+
+    def erro_card(self, cid: int) -> dict:
+        """A missed card as Anki draws it, for reading the explanation again."""
+        card = self.col.get_card(int(cid))
+        parsed = cardfmt.parse(self._prep(card.question()), self._prep(card.answer()))
+        return {"mode": parsed.mode, "css": parsed.css, "front": parsed.front, "back": parsed.back}
+
+    def study_errors(self, days: int = 7, did: int | None = None) -> dict:
+        days = int(days) if int(days) in ERROR_DAYS else 7
+        nodes = [SearchNode(rated=SearchNode.Rated(days=days, rating=SearchNode.RATING_AGAIN))]
+        period = "de hoje" if days == 1 else f"dos últimos {days} dias"
+        title = f"Erros {period}"
+        if did:
+            name = self.col.decks.name(int(did))
+            nodes.append(SearchNode(deck=name))
+            title = f"Erros {period}, {stats.leaf(name)}"
+        search = self.col.build_search_string(*nodes)
+        return self._start_temp(search, 9999, ORDER.RANDOM, title=title, kind="errors", days=days)
+
+    # ------------------------------------------------------------------ roleta: the cards of a topic
+    def _card_entries(self, did: int) -> list[dict]:
+        """Each card of a deck (and subdecks) with the article it starts with and its law."""
+        ids = ids2str(stats.subtree(self.col, did))
+        rows = self.col.db.all(
+            "select c.id, c.queue, substr(n.flds, 1, 300), n.tags from cards c join notes n on n.id = c.nid "
+            f"where c.did in {ids} or c.odid in {ids}"
+        )
+        entries = []
+        for cid, queue, start, tags in rows:
+            law = topics.law_of_tags(tags)
+            entries.append(
+                {
+                    "cid": cid,
+                    "ok": queue >= 0,
+                    "arts": topics.card_articles(start.split("\x1f", 1)[0]),
+                    "law": law[0] if law else None,
+                    "law_label": law[1] if law else None,
+                    "tags": topics.content_tags(tags),
+                }
+            )
+        return entries
+
+    def _topic_lookup(self, data: dict, tid: str) -> tuple[dict, dict, dict, int | None]:
+        found = ro.find_topic(data["roleta"], tid)
+        if not found:
+            raise UserError("Esse tópico não existe mais.")
+        cat, sub, topic, _i = found
+        did = cat.get("deck")
+        if did and not self.col.decks.get(did, default=False):
+            did = None
+        return cat, sub, topic, did
+
+    def _topic_match(self, cat: dict, sub: dict, topic: dict, did: int, entries: list[dict] | None = None) -> dict:
+        names = [sub.get("name") or "", cat["name"], self.col.decks.name(did)]
+        return topics.topic_cards(topic["t"], topic.get("cards"), entries if entries is not None else self._card_entries(did), names)
+
+    def _topic_info(self, data: dict, tid: str, with_tags: bool = False) -> dict:
+        cat, sub, topic, did = self._topic_lookup(data, tid)
+        if not did:
+            return {"tid": tid, "mode": "nodeck", "count": 0}
+        entries = self._card_entries(did)
+        info = self._topic_match(cat, sub, topic, did, entries)
+        out = {k: v for k, v in info.items() if k not in ("cids", "ranges")}
+        out.update({"tid": tid, "deck": did, "deck_name": stats.leaf(self.col.decks.name(did)), "count": len(info["cids"])})
+        if info["mode"] == "tag":
+            out["tag_label"] = topics.tag_label(info["tag"])
+        if with_tags or info["mode"] == "none" or (info["mode"] == "articles" and not info["cids"] and not info["ambiguous"]):
+            counts = topics.tag_counts(entries)
+            suggestion = topics.suggest_tag(topic["t"], counts)
+            if suggestion:
+                out["suggest"] = {"tag": suggestion, "label": topics.tag_label(suggestion), "n": counts[suggestion]}
+            if with_tags:
+                out["tags"] = [{"tag": t, "label": topics.tag_label(t), "n": n} for t, n in sorted(counts.items(), key=lambda kv: kv[0].lower())]
+        return out
+
+    def roleta_topic_cards(self, tid: str, tags: bool = False) -> dict:
+        return self._topic_info(self._data(), tid, with_tags=bool(tags))
+
+    def roleta_link(self, tid: str, link: Any = None) -> dict:
+        """link: None to go back to the articles of the name, {"law": key} or {"tag": tag}."""
+        view = self._ro_change(lambda s: ro.set_cards_link(s, tid, link))
+        view["cards"] = self._topic_info(self._data(), tid, with_tags=True)
+        return view
+
+    def roleta_card_counts(self, cat: str) -> dict:
+        """How many cards each topic of a matéria has, for topics whose cards can be found."""
+        data = self._data()
+        c = ro.find_cat(data["roleta"], cat)
+        did = c.get("deck") if c else None
+        if not c or not did or not self.col.decks.get(did, default=False):
+            return {"cat": cat, "counts": {}}
+        entries = self._card_entries(did)
+        counts = {}
+        for sub in c["subs"]:
+            for topic in sub["topics"]:
+                info = self._topic_match(c, sub, topic, did, entries)
+                if info["mode"] != "none":
+                    counts[topic["id"]] = {"n": len(info["cids"]), "ambiguous": bool(info.get("ambiguous"))}
+        return {"cat": cat, "counts": counts}
+
+    def study_topic(self, tid: str) -> dict:
+        data = self._data()
+        cat, sub, topic, did = self._topic_lookup(data, tid)
+        if not did:
+            raise UserError("Ligue esta matéria a um baralho em Organizar para estudar os cartões dos tópicos.")
+        info = self._topic_match(cat, sub, topic, did)
+        if info.get("ambiguous"):
+            raise UserError("Escolha antes a lei deste tópico.")
+        cids = info["cids"]
+        if not cids:
+            raise UserError("Nenhum cartão deste tópico para estudar.")
+        # in the order they were added, which follows the law for cards made by the skill
+        return self._start_temp(f"cid:{','.join(map(str, cids))}", len(cids), ORDER.ADDED, title=topic["t"], kind="topic", tid=tid)
 
     # ------------------------------------------------------------------ roleta
     def _roleta_view(self, data: dict, extra: dict | None = None) -> dict:
