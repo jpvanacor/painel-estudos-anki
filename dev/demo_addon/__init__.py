@@ -137,6 +137,13 @@ def reasons_state(label):
     log(f"{label}: {sorted(reasons.values())}")
 
 
+def phone_state(label):
+    status = mw.painel_estudos.api.mobile_status()
+    nt = mw.col.models.by_name("Básico")
+    sizes = [(len(t["qfmt"]), len(t["afmt"])) for t in nt["tmpls"]] if nt else []
+    log(f"{label}: {[(t['name'], t['notes'], t['state']) for t in status['types']]} template sizes {sizes}")
+
+
 def pick_cat(cat_id):
     js(f"(function(){{var s=document.querySelector('[data-ro-cat]'); s.value={json.dumps(cat_id)}; s.dispatchEvent(new Event('change',{{bubbles:true}}));}})()")
 
@@ -149,6 +156,9 @@ STEPS = [
     (lambda: js("window.addEventListener('error', function(e){ console.error('STACK ' + (e.error && e.error.stack)); });"), 100),
     (lambda: report("motion", "JSON.stringify({reduced: matchMedia('(prefers-reduced-motion: reduce)').matches, noMotion: document.documentElement.classList.contains('no-motion')})"), 200),
     (lambda: roleta_state("converted from 0.1"), 300),
+    # the phone block goes in the note type first, so the whole run studies cards that carry it
+    (lambda: mw.painel_estudos.api.mobile_enable(), 300),
+    (lambda: phone_state("phone block on"), 300),
     (lambda: shot("01_hoje"), 300),
     (lambda: js("var m=document.getElementById('main'); m.scrollTop = m.scrollHeight;"), 500),
     (lambda: shot("01b_hoje_roleta"), 300),
@@ -282,6 +292,12 @@ STEPS = [
     (lambda: click('[data-go="ajustes"]'), 1600),
     (lambda: js("window.scrollTo(0,0); var m=document.getElementById('main'); m.scrollTop = m.scrollHeight;"), 600),
     (lambda: shot("22_ajustes_sons"), 300),
+    (lambda: js("document.querySelector('.mobile-status').scrollIntoView({block: 'center'})"), 500),
+    (lambda: shot("22b_ajustes_celular"), 300),
+    (lambda: click('[data-act="mobile-off"]'), 1500),
+    (lambda: phone_state("phone block off"), 300),
+    (lambda: js("document.querySelector('.mobile-status').scrollIntoView({block: 'center'})"), 500),
+    (lambda: shot("22c_celular_desligado"), 300),
     (lambda: mw.close(), 0),
 ]
 

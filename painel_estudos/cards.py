@@ -23,6 +23,9 @@ BLOCK_RE = re.compile(r"</?(?:div|p)\b[^>]*>", re.I)
 TAG_RE = re.compile(r"<[^>]+>")
 AV_REF_RE = re.compile(r"\[anki:play:[qa]:\d+\]")
 TYPE_ANS_RE = re.compile(r"\[\[type:[^\]]*\]\]")
+SCRIPT_RE = re.compile(r"<script\b[^>]*>.*?</script\s*>", re.I | re.S)
+# the phone block the panel puts in the templates (mobile.py); the panel draws its own buttons
+MOBILE_RE = re.compile(r"<!-- painel-estudos:celular v\d+ -->.*?<!-- /painel-estudos:celular -->", re.S)
 
 _SPACE = r"(?:\s|&nbsp;|&#160;| )"
 CE_LINE_RE = re.compile(
@@ -67,7 +70,9 @@ def split_styles(rendered: str) -> tuple[str, str]:
 
 
 def clean(rendered: str) -> str:
-    """Removes Anki's audio markers and type-in fields, which this interface draws itself."""
+    """Removes Anki's audio markers and type-in fields, which this interface draws itself, and the
+    card's scripts, which don't run in the panel."""
+    rendered = SCRIPT_RE.sub("", MOBILE_RE.sub("", rendered))
     return TYPE_ANS_RE.sub("", AV_REF_RE.sub("", rendered))
 
 
