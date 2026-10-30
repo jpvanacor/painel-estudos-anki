@@ -25,7 +25,7 @@ PUBLIC = {
     "roleta_delete_cat", "roleta_inspect", "roleta_import", "roleta_file", "roleta_save_backup",
     "roleta_copy", "roleta_clear", "roleta_undo", "roleta_topic_cards", "roleta_link",
     "roleta_card_counts", "study_topic", "erros", "erro_card", "study_errors", "mobile_status",
-    "mobile_enable", "mobile_disable",
+    "mobile_enable", "mobile_disable", "deck_rename", "deck_delete", "deck_undo", "roleta_topic_deck",
 }
 
 

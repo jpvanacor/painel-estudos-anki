@@ -143,6 +143,9 @@ def sanitize_cats(arr: Any) -> list[dict]:
                 link = clean_link(td.get("cards"))
                 if link:
                     topic["cards"] = link
+                deck = td.get("deck")
+                if isinstance(deck, int) and not isinstance(deck, bool) and deck > 0:
+                    topic["deck"] = deck
                 sub["topics"].append(topic)
             cat["subs"].append(sub)
         if not cat["subs"]:
@@ -286,6 +289,26 @@ def find_topic(state: Roleta, tid: str | None) -> tuple[dict, dict, dict, int] |
 
 def path_of(cat: dict, sub: dict) -> str:
     return f"{cat['name']} › {sub['name'] or 'Geral'}" if has_named_subs(cat) else cat["name"]
+
+
+def deck_part(text: Any) -> str:
+    """A Roleta name as one level of an Anki deck name: "::" would start a new level."""
+    part = re.sub(r":{2,}", ":", clean(text)).strip(" :")
+    return part or "Sem nome"
+
+
+def deck_parts(cat: dict, sub: dict, topic: dict) -> list[str]:
+    """The levels under the matéria's deck for a topic: subcategoria, then the topic.
+
+    Matérias without named subcategories go straight to the topic. A subcategory imported from
+    nested headings ("Parte especial › Crimes contra o patrimônio") gets one level per heading,
+    the same levels the Roleta shows.
+    """
+    parts = []
+    if has_named_subs(cat):
+        parts += [deck_part(p) for p in SEP_RE.split(sub["name"] or "Geral") if clean(p)] or ["Geral"]
+    parts.append(deck_part(topic["t"]))
+    return parts
 
 
 def scope_name(cat: dict) -> str:

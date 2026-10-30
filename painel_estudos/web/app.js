@@ -122,6 +122,7 @@
       note: svg('<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 13h8M8 17h5"/>', 16),
       undo: svg('<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>', 16),
       trash: svg('<path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v5M14 11v5"/>', 16),
+      edit: svg('<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/>', 16),
       x: svg('<path d="M18 6 6 18M6 6l12 12"/>', 16),
     };
   })();
@@ -407,6 +408,34 @@
         <button class="btn ${danger ? "danger-solid" : "primary"}" data-act="ask-ok">${esc(ok)}</button></div></div>`);
       el._resolve = resolve;
     });
+  }
+
+  // A dialog with one name to type. submit(value) runs on Enter or the button; if it fails, the
+  // dialog stays open with the message shown, so the name can be fixed.
+  function askName({ title, value = "", ok = "Salvar", submit }) {
+    const el = overlay(`<div class="dialog small-dialog" role="dialog" aria-modal="true" aria-labelledby="ask-title">
+      <h3 id="ask-title">${esc(title)}</h3>
+      <label class="field"><span>Nome</span><input class="input" id="ask-name" value="${esc(value)}" autocomplete="off" spellcheck="false"></label>
+      <div class="actions end top-gap"><button class="btn" data-act="dlg-close">Cancelar</button>
+      <button class="btn primary" data-act="ask-name-ok">${esc(ok)}</button></div></div>`);
+    el._submit = async () => {
+      const input = el.querySelector("#ask-name");
+      if (el._busy || !input) return;
+      el._busy = true;
+      try {
+        await submit(input.value);
+        closeOverlay(el);
+      } catch (err) {
+        input.focus();
+      } finally {
+        el._busy = false;
+      }
+    };
+    setTimeout(() => {
+      const input = el.querySelector("#ask-name");
+      if (input) input.select();
+    }, 60);
+    return el;
   }
 
   // ---------------------------------------------------------------- frame and navigation
@@ -1084,10 +1113,12 @@
         <button class="btn" data-open="browse" data-did="${d.did}">Procurar</button>
         <button class="btn" data-open="options" data-did="${d.did}">Opções do baralho</button>
         <button class="btn" data-open="stats" data-did="${d.did}">Estatísticas</button>
+        <button class="btn" data-act="deck-rename" data-did="${d.did}" data-name="${esc(d.name)}">Renomear</button>
       </div>
       <section class="section"><div class="section-head"><h2>Acerto</h2></div><p style="margin:12px 0 0">${esc(accText)}</p></section>
       <section class="section"><div class="section-head"><h2>Cartões</h2><span class="muted">${plural(d.maturity.total, "cartão", "cartões")}</span></div>
         <div style="margin-top:14px">${maturityBar(d.maturity, true)}</div>${LEGEND}</section>
+      ${subdecksSection(d)}
       <section class="section"><div class="section-head"><h2>Temas</h2><span class="muted">do mais fraco para o mais forte, pelas etiquetas, nos últimos 90 dias</span></div>${weak}</section>
       ${
         r
@@ -1096,7 +1127,77 @@
           <div class="actions" style="margin-top:16px"><button class="btn" data-act="ro-open" data-cat="${esc(r.cat.id)}">Abrir na Roleta</button></div></section>`
           : ""
       }
+      ${
+        d.can_delete
+          ? `<div class="page-foot"><button class="link danger" data-act="deck-delete" data-matter="1" data-did="${d.did}" data-name="${esc(d.name)}" data-cards="${d.maturity.total}" data-kids="${d.decks.length}">Excluir o baralho ${esc(d.name)}</button></div>`
+          : ""
+      }
     </div>`);
+  }
+
+  // The decks inside a matéria (the Roleta makes one per topic studied), each with its own actions.
+  function subdecksSection(d) {
+    if (!d.decks.length) return "";
+    const rows = d.decks
+      .map(
+        (k) => `<tr>
+        <td><span class="deck-name" style="--depth:${k.depth - 1}">${esc(k.name)}</span></td>
+        <td>${k.due ? `<strong>${k.due}</strong>` : `<span class="zero">0</span>`}</td>
+        <td>${k.cards}</td>
+        <td class="row-acts">${k.due ? `<button class="btn" data-act="study" data-did="${k.did}">Estudar</button>` : ""}<button class="btn quiet" data-open="browse" data-did="${k.did}">Procurar</button><button class="icon-btn" data-act="deck-rename" data-did="${k.did}" data-name="${esc(k.name)}" title="Renomear" aria-label="Renomear ${esc(k.name)}">${ICON.edit}</button><button class="icon-btn del" data-act="deck-delete" data-did="${k.did}" data-name="${esc(k.name)}" data-cards="${k.cards}" data-kids="${k.kids}" title="Excluir" aria-label="Excluir ${esc(k.name)}">${ICON.trash}</button></td>
+      </tr>`
+      )
+      .join("");
+    return `<section class="section"><div class="section-head"><h2>Baralhos dentro de ${esc(d.name)}</h2><span class="muted">${plural(d.decks.length, "baralho", "baralhos")}</span></div>
+      <table class="grid decks-grid"><thead><tr><th>Baralho</th><th>Hoje</th><th>Cartões</th><th><span class="sr-only">Ações</span></th></tr></thead><tbody>${rows}</tbody></table></section>`;
+  }
+
+  function renameDeck(did, name) {
+    askName({
+      title: "Renomear baralho",
+      value: name,
+      ok: "Renomear",
+      submit: async (value) => {
+        const res = await api("deck_rename", { did, name: value });
+        toast(`Nome salvo: ${res.name}.`);
+        rerender();
+      },
+    });
+  }
+
+  async function deleteDeck(t) {
+    const did = Number(t.dataset.did);
+    const name = t.dataset.name;
+    const cards = Number(t.dataset.cards || 0);
+    const kids = Number(t.dataset.kids || 0);
+    const matter = !!t.dataset.matter;
+    const kidsText = kids === 1 ? "o baralho que está dentro dele" : `os ${kids} baralhos que estão dentro dele`;
+    const cardsText = cards === 1 ? "o único cartão" : `os ${cards} cartões`;
+    let what = `O baralho ${name} está vazio.`;
+    if (kids && cards) what = `O baralho ${name} é excluído com ${kidsText} e ${cardsText}, como no Anki.`;
+    else if (cards) what = `O baralho ${name} é excluído com ${cardsText}, como no Anki.`;
+    else if (kids) what = `O baralho ${name} é excluído com ${kidsText}, que não têm cartões.`;
+    const ok = await ask({ title: `Excluir ${name}?`, msg: `${what} Dá para desfazer logo em seguida.`, ok: "Excluir", danger: true });
+    if (!ok) return;
+    let res;
+    try {
+      res = await api("deck_delete", { did });
+    } catch (err) {
+      return;
+    }
+    await (matter ? go("materias") : rerender());
+    const lost = res.cards ? `, com ${plural(res.cards, "cartão", "cartões")}` : "";
+    toast(`Baralho excluído: ${res.name}${lost}.`, { action: { label: "Desfazer", fn: undoDeckDelete } });
+  }
+
+  async function undoDeckDelete() {
+    try {
+      await api("deck_undo");
+    } catch (err) {
+      return;
+    }
+    toast("Exclusão desfeita.");
+    rerender();
   }
 
   // ---------------------------------------------------------------- caderno de erros
@@ -1799,7 +1900,11 @@
       <label class="field note-field"><span>Anotação</span><textarea class="note" data-note="${esc(f.topic.id)}" rows="3" placeholder="Artigos, súmulas, pontos a revisar">${esc(f.topic.note || "")}</textarea></label>
       <div class="topic-cards" id="topic-cards" aria-live="polite">${deck ? `<p class="muted small">Procurando os cartões deste tópico…</p>` : ""}</div>
       <div class="actions">
-        <button class="btn primary" data-act="dlg-close">${result ? "Estudar" : "Fechar"}</button>
+        ${
+          result
+            ? `<button class="btn primary" data-act="ro-accept" data-tid="${esc(f.topic.id)}" title="Cria o baralho do tópico dentro do baralho da matéria">Estudar</button>`
+            : `<button class="btn primary" data-act="dlg-close">Fechar</button>`
+        }
         ${result && !info.cycleDone ? `<button class="btn" data-act="ro-again" data-tid="${esc(f.topic.id)}">Sortear outro</button>` : ""}
         ${!result ? `<button class="btn" data-act="ro-toggle-dlg" data-tid="${esc(f.topic.id)}">${f.topic.seen ? "Voltar ao sorteio" : "Marcar como visto"}</button>` : ""}
         <span class="topic-study" id="topic-study">${deck ? `<button class="btn" data-act="study" data-did="${deck}">Estudar os cartões dessa matéria</button>` : ""}</span>
@@ -1848,8 +1953,13 @@
       : "";
     let text = "";
     let links = [];
-    if (info.mode === "nodeck") text = `<p class="muted small">Ligue esta matéria a um baralho em Organizar para estudar os cartões de cada tópico.</p>`;
-    else if (info.mode === "tag") {
+    const own = info.topic_deck;
+    if (info.mode === "nodeck")
+      text = `<p class="muted small">Esta matéria ainda não tem baralho. Ligue a um baralho em Organizar, ou clique Estudar num tópico sorteado: o painel cria o baralho da matéria e o do tópico.</p>`;
+    else if (info.mode === "deck") {
+      text = `<p class="small">${cards(n)} no baralho do tópico, ${esc(own.path)}.</p>`;
+      links = [pick];
+    } else if (info.mode === "tag") {
       text = `<p class="small">${cards(n)} pela etiqueta ${esc(info.tag_label)}.</p>`;
       links = [pick, link("tc-auto", info.has_articles ? "Usar os artigos do nome" : "Desligar")];
     } else if (info.mode === "articles" && info.ambiguous)
@@ -1867,6 +1977,7 @@
       text = `<p class="muted small">O nome deste tópico não traz artigos.${suggestion}</p>`;
       links = [pick];
     }
+    if (own && info.mode !== "deck") text += `<p class="muted small">Baralho do tópico: ${esc(own.path)}, ${own.n ? cards(own.n) : "ainda sem cartões"}.</p>`;
     let html = text + (links.length && !opts.picker ? `<div class="tc-links">${links.join("")}</div>` : "");
     if (opts.picker && info.tags) {
       const current = info.mode === "tag" ? info.tag : info.suggest ? info.suggest.tag : "";
@@ -2208,6 +2319,23 @@ Regência verbal`;
       renderPanel();
     },
     "ro-detail": (t) => openTopicDialog(t.dataset.tid, "detail"),
+    // Estudar on a drawn topic: the panel makes the topic's deck (Matéria::Subcategoria::Tópico)
+    "ro-accept": (t) => {
+      const tid = t.dataset.tid;
+      closeOverlay(topOverlay(t));
+      roCall("roleta_topic_deck", { tid })
+        .then((res) => {
+          const d = res.topic_deck;
+          toast(`${d.created ? "Baralho criado" : "Baralho do tópico"}: ${d.path}`, { action: { label: "Adicionar cartões", fn: () => openAnki("add", d.did) } });
+        })
+        .catch(() => {});
+    },
+    "deck-rename": (t) => renameDeck(Number(t.dataset.did), t.dataset.name),
+    "deck-delete": (t) => deleteDeck(t),
+    "ask-name-ok": (t) => {
+      const el = topOverlay(t);
+      if (el && el._submit) el._submit();
+    },
     "ro-study-topic": (t) => studyTopic(t.dataset.tid),
     "tc-pick": (t) => loadTopicCards(topOverlay(t), { picker: true }),
     "tc-cancel": (t) => renderTopicCards(topOverlay(t)),
@@ -2400,6 +2528,10 @@ Regência verbal`;
       } else if (k === "enter" && target.id === "org-name") {
         ev.preventDefault();
         saveOrganizer(topOverlay(target));
+      } else if (k === "enter" && target.id === "ask-name") {
+        ev.preventDefault();
+        const el = topOverlay(target);
+        if (el && el._submit) el._submit();
       } else if (k === "enter" && (ev.ctrlKey || ev.metaKey) && target.id === "ro-paste") {
         ev.preventDefault();
         doImport(target.value);
