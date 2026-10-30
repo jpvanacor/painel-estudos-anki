@@ -17,6 +17,7 @@ DEFAULTS: dict[str, Any] = {
     "roleta": None,
     "reasons": {},  # why a card was missed: review log id (ms, as text) -> reason code
     "made": [],  # ids of the decks the panel created for Roleta topics (see stats.matter_decks)
+    "trash": [],  # what the Roleta removed, for the Lixeira (see roleta.clean_trash)
 }
 MAX_MADE = 5000
 
@@ -48,6 +49,7 @@ def load(col) -> dict[str, Any]:
     merged["fx"] = {**DEFAULTS["fx"], **(data.get("fx") or {})}
     merged["reasons"] = clean_reasons(data.get("reasons"))
     merged["made"] = clean_made(data.get("made"))
+    merged["trash"] = ro.clean_trash(data.get("trash"))
     if isinstance(data.get("roleta"), dict):
         merged["roleta"] = ro.load(data["roleta"])
         merged["_converted"] = False

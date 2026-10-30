@@ -26,6 +26,7 @@ PUBLIC = {
     "roleta_copy", "roleta_clear", "roleta_undo", "roleta_topic_cards", "roleta_link",
     "roleta_card_counts", "study_topic", "erros", "erro_card", "study_errors", "mobile_status",
     "mobile_enable", "mobile_disable", "deck_rename", "deck_delete", "deck_undo", "roleta_topic_deck",
+    "deck_targets", "deck_move", "trash", "trash_restore", "trash_delete", "trash_empty", "ui_set",
 }
 
 
@@ -45,6 +46,7 @@ class Shell:
         qconnect(self.action.triggered, self.show_panel)
         mw.form.menuTools.addAction(self.action)
         self._install_hooks()
+        mw.toolbar.draw()  # with the Painel de Estudos button (see _on_toolbar_links)
 
     # ------------------------------------------------------------------ window
     def show_panel(self) -> None:
@@ -132,6 +134,13 @@ class Shell:
         gui_hooks.sync_will_start.append(self._on_sync_start)
         gui_hooks.sync_did_finish.append(self._on_sync_done)
         gui_hooks.profile_will_close.append(self._on_profile_close)
+        gui_hooks.top_toolbar_did_init_links.append(self._on_toolbar_links)
+
+    def _on_toolbar_links(self, links: list, toolbar: Any) -> None:
+        # The way back from Anki's own screen, first in its top bar. In Portuguese, Anki calls its
+        # card browser "Painel", which is easy to take for this one.
+        link = toolbar.create_link("painel_estudos", "Painel de Estudos", self.show_panel, tip="Volta para o Painel de Estudos", id="painel-estudos")
+        links.insert(0, link)
 
     def _on_operation(self, changes: Any, handler: object | None) -> None:
         if not self.active or handler is self:

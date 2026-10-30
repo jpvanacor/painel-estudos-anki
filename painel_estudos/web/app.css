@@ -591,3 +591,84 @@ input[type="range"] { width: 220px; accent-color: var(--ink); }
 .decks-grid td.row-acts .btn { margin-right: 4px; }
 .page-foot { margin-top: 44px; padding-top: 16px; border-top: 1px solid var(--form-soft); }
 #ask-name { width: 100%; }
+
+/* ------------------------------------------------------------------ folding */
+.fold-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer;
+}
+.fold-btn:focus-visible, .tree-btn:focus-visible, .ro-group:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 4px; }
+.fold-chev { flex: none; color: var(--pencil); transition: transform .15s ease; }
+.folded > .section-head .fold-chev, .fold-group.folded .fold-chev,
+.fold-btn[aria-expanded="false"] .fold-chev, .tree-btn[aria-expanded="false"] .fold-chev, .ro-group[aria-expanded="false"] .fold-chev { transform: rotate(-90deg); }
+.section.folded > .fold-body, .fold-group.folded > .fold-body { display: none; }
+.section.folded > .section-head { margin-bottom: 0; }
+.fold-group .group-name { display: flex; width: 100%; gap: 8px; }
+.fold-group .group-name .small { margin-left: auto; font-weight: 400; }
+.no-motion .fold-chev { transition: none; }
+
+/* the deck tree inside a matéria */
+.decks-grid tr[hidden] { display: none; }
+.decks-grid .deck-name { display: inline-flex; align-items: center; gap: 2px; }
+.tree-btn {
+  display: inline-grid; place-items: center; width: 24px; height: 24px; flex: none;
+  padding: 0; border: 0; border-radius: 5px; background: none; color: var(--pencil); cursor: pointer;
+}
+.tree-btn:hover { background: var(--wash); color: var(--ink); }
+.tree-pad { display: inline-block; width: 24px; flex: none; }
+
+/* dragging decks */
+tr[draggable="true"] { cursor: grab; }
+tr.dragging { opacity: .45; }
+.deck-dragging .drop-head { outline: 2px dashed var(--form); outline-offset: 4px; border-radius: 6px; }
+.drop-over td { background: var(--wash) !important; box-shadow: inset 0 2px 0 var(--focus), inset 0 -2px 0 var(--focus); }
+.drop-head.drop-over { outline: 2px solid var(--focus); }
+.drag-hint { margin: 10px 0 2px; }
+
+/* Roleta topics grouped by subcategoria */
+.ro-group {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  margin: 10px 0 2px; padding: 6px 4px; border: 0; border-radius: 6px; background: none;
+  color: var(--pencil); font-weight: 600; font-size: 14px; text-align: left; cursor: pointer;
+}
+.ro-group:hover { background: var(--wash); color: var(--ink); }
+.ro-group .badge { margin-left: auto; }
+.ro-list > .ro-group:first-child { margin-top: 0; }
+
+/* notices */
+.toast-x {
+  display: inline-grid; place-items: center; width: 26px; height: 26px; flex: none;
+  padding: 0; border: 0; border-radius: 6px; background: none; color: inherit; opacity: .7; cursor: pointer;
+}
+.toast-x:hover { opacity: 1; background: rgba(255, 255, 255, .12); }
+
+/* rail */
+.nav-badge {
+  display: inline-block; min-width: 20px; margin-left: 8px; padding: 0 6px; border-radius: 999px;
+  background: var(--form-soft); color: var(--ink); font-size: 12px; font-weight: 600; text-align: center;
+}
+kbd {
+  display: inline-block; min-width: 20px; padding: 1px 6px; border: 1px solid var(--form); border-bottom-width: 2px;
+  border-radius: 5px; background: var(--sheet); font-family: inherit; font-size: 12.5px; text-align: center; line-height: 1.4;
+}
+.nav-item kbd { margin-left: 6px; }
+
+/* the shortcuts list */
+.shortcuts-dialog { width: min(560px, 100%); }
+.shortcuts-dialog h4 { margin-top: 20px; }
+.keys { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 8px 0 0; }
+.keys dt { white-space: nowrap; }
+.keys dd { margin: 0; color: var(--pencil); }
+
+/* lixeira */
+.trash-list { list-style: none; margin: 0; padding: 0; }
+.trash-item { display: flex; align-items: center; gap: 16px; padding: 14px 0; border-top: 1px solid var(--form-soft); }
+.trash-item:first-child { border-top: 0; }
+.trash-kind {
+  flex: none; width: 104px; font-size: 12.5px; font-weight: 600; letter-spacing: .02em; text-transform: uppercase; color: var(--pencil);
+}
+.trash-body { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.trash-label { font-weight: 500; overflow-wrap: anywhere; }
+.trash-meta { font-size: 13.5px; color: var(--pencil); }
+.trash-acts { flex: none; display: flex; gap: 6px; }
+.trash-note { margin-top: 26px; }

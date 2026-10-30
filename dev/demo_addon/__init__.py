@@ -181,6 +181,28 @@ def show_decks():
     js("(function(){var g=document.querySelector('.decks-grid'); if(g) g.scrollIntoView({block:'center'});})()")
 
 
+def drag(src, dst):
+    """Drags one element onto another with the page's own drag events."""
+    js(
+        f"""(function(){{var s=document.querySelector({json.dumps(src)}), d=document.querySelector({json.dumps(dst)});
+        if(!s||!d){{console.log('demo: drag missing'); return;}}
+        var dt=new DataTransfer();
+        s.dispatchEvent(new DragEvent('dragstart',{{bubbles:true,cancelable:true,dataTransfer:dt}}));
+        d.dispatchEvent(new DragEvent('dragover',{{bubbles:true,cancelable:true,dataTransfer:dt}}));
+        d.dispatchEvent(new DragEvent('drop',{{bubbles:true,cancelable:true,dataTransfer:dt}}));
+        s.dispatchEvent(new DragEvent('dragend',{{bubbles:true,dataTransfer:dt}}));}})()"""
+    )
+
+
+def ui_file():
+    path = os.path.join(mw.addonManager.addonsFolder("painel_estudos"), "user_files", "ui.json")
+    try:
+        with open(path, encoding="utf-8") as handle:
+            log(f"ui.json: {handle.read()}")
+    except OSError as err:
+        log(f"ui.json missing: {err}")
+
+
 def render_sounds():
     js("Promise.all(PE.sounds().map(function(n){return PE.renderSound(n, 3);})).then(function(r){window.__sfx=r;})")
 
@@ -393,8 +415,118 @@ STEPS = [
     (show_decks, 600),
     (lambda: shot("48_materia_escura"), 300),
     (lambda: theme(False), 1500),
+    # 0.6: shortcuts, folding, moving decks, the Lixeira, Ctrl+Z in the Roleta, the way back from Anki
+    (lambda: js("PE.go('home')"), 1600),
+    (lambda: key("?"), 900),
+    (lambda: shot("49_atalhos"), 300),
+    (lambda: key("Escape"), 600),
+    (lambda: click('[data-act="fold"][data-key="h.roleta"]'), 700),
+    (lambda: js("var m=document.getElementById('main'); m.scrollTop = m.scrollHeight;"), 400),
+    (lambda: shot("50_hoje_roleta_dobrada"), 300),
+    (lambda: js("PE.go('materias')"), 1500),
+    (lambda: open_row("Direito Penal (CP)"), 1800),
+    (lambda: click('[data-act="fold"][data-key="m.cartoes"]'), 500),
+    (lambda: click('[data-act="fold"][data-key="m.temas"]'), 500),
+    (lambda: click(".decks-grid .tree-btn"), 600),
+    (show_decks, 500),
+    (lambda: shot("51_materia_dobrada"), 300),
+    (lambda: click(".decks-grid .tree-btn"), 600),
+    # drag the topic deck onto the section title: it goes right under the matéria
+    (lambda: drag(".decks-grid tr.deck-row:last-child", ".drop-head"), 1800),
+    (show_decks, 500),
+    (lambda: shot("52_arrastado"), 300),
+    (lambda: deck_state("after dragging the topic deck"), 300),
+    (lambda: click(".toast-act"), 1600),
+    (lambda: deck_state("after Desfazer of the drag"), 300),
+    # Mover para... into another matéria, then Ctrl+Z
+    (show_decks, 400),
+    (lambda: click_last('.decks-grid [data-act="deck-move"]'), 900),
+    (lambda: js("(function(){var s=document.getElementById('mv-target'); for (var i=0;i<s.options.length;i++) if (s.options[i].text==='Processo Penal') s.value=s.options[i].value;})()"), 300),
+    (lambda: shot("53_mover"), 300),
+    (lambda: click('[data-act="mv-ok"]'), 1800),
+    (lambda: deck_state("after Mover to Processo Penal"), 300),
+    (lambda: key("z", ctrlKey=True), 1800),
+    (lambda: deck_state("after Ctrl+Z"), 300),
+    # delete the topic deck, find it in the Lixeira, restore it
+    (show_decks, 400),
+    (lambda: click_last('.decks-grid [data-act="deck-delete"]'), 900),
+    (lambda: click('[data-act="ask-ok"]'), 1800),
+    (lambda: deck_state("after deleting the topic deck"), 300),
+    (lambda: click('[data-go="lixeira"]'), 1600),
+    (lambda: shot("54_lixeira"), 300),
+    (lambda: click('.trash-item [data-act="trash-restore"]'), 2200),
+    (lambda: shot("55_restaurado"), 300),
+    (lambda: deck_state("after restoring from the Lixeira"), 300),
+    # Roleta: topics grouped by subcategoria, a group folded, two removals taken back with Ctrl+Z
+    (lambda: js("PE.go('roleta')"), 1800),
+    (lambda: pick_cat("c-penal"), 1200),
+    (lambda: click('[data-act="ro-sel"][data-sel="_all"]'), 1000),
+    (lambda: click('[data-act="ro-tab"][data-tab="list"]'), 900),
+    (lambda: click(".ro-list .ro-group"), 700),
+    (lambda: shot("56_topicos_grupos"), 300),
+    (lambda: click(".ro-list .ro-group"), 700),
+    (lambda: click('.ro-list [data-act="ro-remove"]'), 900),
+    (lambda: click('.ro-list [data-act="ro-remove"]'), 900),
+    (lambda: roleta_state("after two removals"), 300),
+    (lambda: key("z", ctrlKey=True), 1000),
+    (lambda: key("z", ctrlKey=True), 1000),
+    (lambda: roleta_state("after Ctrl+Z twice"), 300),
+    (lambda: js("PE.topic('t8')"), 1500),
+    (lambda: shot("57_topico_criar_baralho"), 300),
+    (lambda: click('[data-act="tc-make-deck"]'), 1800),
+    (lambda: shot("58_topico_baralho_criado"), 300),
+    (lambda: key("Escape"), 700),
+    # Anki's own screen has a Painel de Estudos button; it brings the panel back
+    (lambda: click('[data-open="anki"]'), 1500),
+    (lambda: shot("59_anki_com_botao"), 300),
+    (lambda: mw.toolbar.web.eval("var a=document.getElementById('painel-estudos'); if (a) a.click();"), 1800),
+    (lambda: widgets_state("after the top bar button"), 300),
+    (lambda: shot("60_painel_de_volta"), 300),
+    (ui_file, 300),
     (lambda: mw.close(), 0),
 ]
+
+
+def widgets_state(label):
+    shell = mw.painel_estudos
+    log(
+        f"{label}: active={shell.active} panel={shell.web.isVisible()} {shell.web.width()}x{shell.web.height()}"
+        f" anki_web={mw.web.isVisible()} toolbar={mw.toolbarWeb.isVisible()} menubar={mw.form.menubar.isVisible()}"
+        f" state={mw.state} layout={[type(mw.mainLayout.itemAt(i).widget()).__name__ for i in range(mw.mainLayout.count())]}"
+    )
+
+
+def tools_action(text):
+    for action in mw.form.menuTools.actions():
+        if action.text().replace("&", "") == text:
+            action.trigger()
+            return
+    log(f"no action {text!r} in Ferramentas: {[a.text() for a in mw.form.menuTools.actions()]}")
+
+
+# PAINEL_SCENARIO=back: only going to Anki's own screen and back, several ways
+BACK = [
+    (lambda: widgets_state("panel at start"), 300),
+    (lambda: shot("b1_painel"), 300),
+    (lambda: click('[data-open="anki"]'), 1500),
+    (lambda: widgets_state("after Usar a interface do Anki"), 300),
+    (lambda: shot("b2_anki"), 300),
+    (lambda: tools_action("Abrir o Painel de Estudos"), 1800),
+    (lambda: widgets_state("after Ferramentas, Abrir o Painel"), 300),
+    (lambda: shot("b3_painel_de_novo"), 300),
+    # again, now opening a deck in Anki before coming back
+    (lambda: click('[data-open="anki"]'), 1500),
+    (lambda: mw.col.decks.select(mw.col.decks.id_for_name("Direito Civil")), 200),
+    (lambda: mw.moveToState("overview"), 1500),
+    (lambda: widgets_state("Anki on a deck's overview"), 300),
+    (lambda: shot("b4_anki_baralho"), 300),
+    (lambda: tools_action("Abrir o Painel de Estudos"), 1800),
+    (lambda: widgets_state("back from the overview"), 300),
+    (lambda: shot("b5_painel_de_novo"), 300),
+    (lambda: mw.close(), 0),
+]
+if os.environ.get("PAINEL_SCENARIO") == "back":
+    STEPS = BACK
 
 
 def run(i=0):

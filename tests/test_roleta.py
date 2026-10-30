@@ -295,3 +295,82 @@ def test_topic_deck_id_is_kept_and_cleaned():
     kept = again["cats"][0]["subs"][0]["topics"]
     assert kept[0]["deck"] == 1793366243856
     assert "deck" not in kept[1]
+
+
+# ------------------------------------------------------------------ lixeira
+def test_removed_topic_goes_back_to_its_place():
+    state = loaded()
+    leg = next(c for c in state["cats"] if c["name"] == "Legislação Complementar")
+    licit = next(s for s in leg["subs"] if s["name"] == "Lei de Licitações (14.133/21)")
+    first = licit["topics"][0]
+    item = ro.trash_topic(state, first["id"])
+    ro.remove_topic(state, first["id"])
+    assert [t["t"] for t in licit["topics"]] == ["Modalidades"]
+    assert item["where"] == "Legislação Complementar › Lei de Licitações (14.133/21)"
+    result = ro.restore(state, json.loads(json.dumps(item)))  # as stored in the collection
+    assert result["msg"] == "Restaurado: Princípios"
+    assert [t["t"] for t in licit["topics"]] == ["Princípios", "Modalidades"]
+    with pytest.raises(ro.RoletaError):
+        ro.restore(state, item)  # already there
+
+
+def test_topic_comes_back_even_if_its_materia_is_gone():
+    state = loaded()
+    pt = next(c for c in state["cats"] if c["name"] == "Português")
+    item = ro.trash_topic(state, pt["subs"][0]["topics"][1]["id"])
+    ro.delete_cat(state, pt["id"])
+    ro.restore(state, item)
+    again = next(c for c in state["cats"] if c["name"] == "Português")
+    assert [t["t"] for s in again["subs"] for t in s["topics"]] == ["Regência"]
+
+
+def test_materia_and_subcategoria_restore_and_merge():
+    state = loaded()
+    leg = next(c for c in state["cats"] if c["name"] == "Legislação Complementar")
+    item = ro.trash_cat(state, leg["id"])
+    assert item["n"] == 4 and item["pos"] == 0
+    ro.delete_cat(state, leg["id"])
+    ro.restore(state, item)
+    assert state["cats"][0]["name"] == "Legislação Complementar" and len(ro.items_of(state["cats"][0]["subs"])) == 4
+    # a matéria with the same name already there: the missing topics are added to it
+    ro.add_topic(state, state["cats"][0]["id"], state["cats"][0]["subs"][0]["id"], "Contratação direta")
+    result = ro.restore(state, item)
+    assert "0 tópicos" in result["msg"] and len(ro.items_of(state["cats"][0]["subs"])) == 5
+    # Organizar deleting a subcategoria
+    leg = state["cats"][0]
+    licit = next(s for s in leg["subs"] if s["name"] == "Lei de Licitações (14.133/21)")
+    keep = [{"id": s["id"], "name": s["name"]} for s in leg["subs"] if s is not licit]
+    trashed = ro.trash_subs(state, leg["id"], {k["id"] for k in keep})
+    assert [t["label"] for t in trashed] == ["Lei de Licitações (14.133/21)"] and trashed[0]["n"] == 3
+    ro.save_cat(state, leg["id"], leg["name"], keep)
+    assert all(s["name"] != "Lei de Licitações (14.133/21)" for s in leg["subs"])
+    ro.restore(state, trashed[0])
+    licit = next(s for s in leg["subs"] if s["name"] == "Lei de Licitações (14.133/21)")
+    assert [t["t"] for t in licit["topics"]] == ["Princípios", "Modalidades", "Contratação direta"]
+    ids = [x["id"] for c in state["cats"] for s in c["subs"] for x in [s, *s["topics"]]]
+    assert len(ids) == len(set(ids))
+
+
+def test_whole_roleta_snapshot_swaps_with_the_current_one():
+    state = loaded()
+    item = ro.trash_roleta(state, "Roleta apagada")
+    assert item["cats_n"] == 2 and item["n"] == 7
+    state.update(ro.empty())
+    assert ro.trash_roleta(state, "nada") is None
+    ro.import_text(state, '{"Direito Civil": ["Prescrição", "Decadência"]}')
+    result = ro.restore(state, item)
+    assert result["replaced"]["n"] == 2 and [c["name"] for c in state["cats"]] == ["Legislação Complementar", "Português"]
+
+
+def test_trash_keeps_30_days_and_five_whole_roletas():
+    now = 1_800_000_000_000
+    day = ro.DAY_MS
+    items = [{"id": f"r{i}", "kind": "roleta", "when": now - i, "label": "x", "cats": []} for i in range(7)]
+    items += [
+        {"id": "old", "kind": "topic", "when": now - 31 * day},
+        {"id": "new", "kind": "topic", "when": now - 29 * day},
+        {"id": "odd", "kind": "deck", "when": now},
+        "lixo",
+    ]
+    kept = ro.clean_trash(items, now=now)
+    assert [t["id"] for t in kept] == ["r0", "r1", "r2", "r3", "r4", "new"]
