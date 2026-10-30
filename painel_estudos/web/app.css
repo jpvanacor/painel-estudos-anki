@@ -583,3 +583,11 @@ input[type="range"] { width: 220px; accent-color: var(--ink); }
   .ce { gap: 16px; }
   .acc-bar, .matbar { display: none; }
 }
+
+/* ------------------------------------------------------------------ baralhos dentro da matéria */
+.decks-grid .deck-name { display: inline-block; padding-left: calc(var(--depth, 0) * 20px); font-weight: 500; }
+.decks-grid td.row-acts { white-space: nowrap; padding-top: 7px; padding-bottom: 7px; }
+.decks-grid td.row-acts > * { vertical-align: middle; }
+.decks-grid td.row-acts .btn { margin-right: 4px; }
+.page-foot { margin-top: 44px; padding-top: 16px; border-top: 1px solid var(--form-soft); }
+#ask-name { width: 100%; }

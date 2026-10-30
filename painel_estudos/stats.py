@@ -20,14 +20,22 @@ def leaf(name: str) -> str:
 
 
 def _children(col, did: int) -> list[tuple[str, int]]:
-    return [(leaf(name), int(cid)) for name, cid in col.decks.children(did) if not col.decks.is_filtered(cid)]
+    """The decks right under did (Anki's children() also lists the ones further down)."""
+    depth = col.decks.name(did).count("::") + 1
+    return [
+        (leaf(name), int(cid))
+        for name, cid in col.decks.children(did)
+        if name.count("::") == depth and not col.decks.is_filtered(cid)
+    ]
 
 
-def matter_decks(col, root: int | None = None) -> list[tuple[str, int]]:
+def matter_decks(col, root: int | None = None, made: Any = ()) -> list[tuple[str, int]]:
     """(display name, deck id) of each matéria.
 
     With a root deck chosen in the settings, its subdecks are the matérias. Otherwise the
-    top-level decks are, unless there is a single top-level deck with subdecks.
+    top-level decks are, unless there is a single top-level deck with subdecks of its own.
+    Decks the panel made for Roleta topics (made) don't count for that: a lone matéria with
+    topic decks stays a matéria.
     """
     if root and col.decks.get(root, default=False):
         kids = _children(col, int(root))
@@ -36,7 +44,8 @@ def matter_decks(col, root: int | None = None) -> list[tuple[str, int]]:
     tops = [d for d in col.decks.all_names_and_ids(skip_empty_default=True, include_filtered=False) if "::" not in d.name]
     if len(tops) == 1:
         kids = _children(col, int(tops[0].id))
-        if kids:
+        made = set(made or ())
+        if any(did not in made for _name, did in kids):
             return kids
     return [(d.name, int(d.id)) for d in tops]
 
@@ -175,11 +184,11 @@ def goal(col, unit: str, value: float) -> dict[str, Any]:
     }
 
 
-def plan(col, root: int | None) -> list[dict[str, Any]]:
+def plan(col, root: int | None, made: Any = ()) -> list[dict[str, Any]]:
     """The matérias with cards for today, weakest first."""
     nodes = due_nodes(col)
     rows = []
-    for name, did in matter_decks(col, root):
+    for name, did in matter_decks(col, root, made):
         node = nodes.get(did)
         new, learn, review = (node.new_count, node.learn_count, node.review_count) if node else (0, 0, 0)
         acc, answers = accuracy(col, subtree(col, did), 30)

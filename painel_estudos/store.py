@@ -16,7 +16,9 @@ DEFAULTS: dict[str, Any] = {
     "fx": {"sound": True, "volume": 0.7, "motion": True},
     "roleta": None,
     "reasons": {},  # why a card was missed: review log id (ms, as text) -> reason code
+    "made": [],  # ids of the decks the panel created for Roleta topics (see stats.matter_decks)
 }
+MAX_MADE = 5000
 
 REASONS = {"nao_sabia": "Não sabia", "confundi": "Confundi", "atencao": "Falta de atenção", "pegadinha": "Pegadinha"}
 KEEP_REASONS_MS = 400 * 86400 * 1000
@@ -30,6 +32,13 @@ def clean_reasons(raw: Any, now_ms: int | None = None) -> dict[str, str]:
     return {k: v for k, v in raw.items() if isinstance(k, str) and k.isdigit() and int(k) >= oldest and v in REASONS}
 
 
+def clean_made(raw: Any) -> list[int]:
+    if not isinstance(raw, list):
+        return []
+    out = list(dict.fromkeys(d for d in raw if isinstance(d, int) and not isinstance(d, bool) and d > 0))
+    return out[-MAX_MADE:]
+
+
 def load(col) -> dict[str, Any]:
     raw = col.get_config(KEY, None)
     data = raw if isinstance(raw, dict) else {}
@@ -38,6 +47,7 @@ def load(col) -> dict[str, Any]:
     merged["goal"] = {**DEFAULTS["goal"], **(data.get("goal") or {})}
     merged["fx"] = {**DEFAULTS["fx"], **(data.get("fx") or {})}
     merged["reasons"] = clean_reasons(data.get("reasons"))
+    merged["made"] = clean_made(data.get("made"))
     if isinstance(data.get("roleta"), dict):
         merged["roleta"] = ro.load(data["roleta"])
         merged["_converted"] = False

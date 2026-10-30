@@ -3,17 +3,18 @@
 from __future__ import annotations
 
 import copy
+import re
 import time
 from collections import Counter
 from typing import Any, Callable
 
 from anki.cards import Card
-from anki.collection import SearchNode
+from anki.collection import OpChanges, SearchNode
 from anki.decks import DeckId, FilteredDeckConfig
 from anki.errors import FilteredDeckError
 from anki.scheduler.v3 import CardAnswer
 from anki.utils import ids2str
-from aqt import dialogs, mw
+from aqt import dialogs, gui_hooks, mw
 from aqt.qt import QApplication, QFileDialog
 from aqt.sound import av_player
 from aqt.theme import theme_manager
@@ -23,7 +24,7 @@ from . import mobile
 from . import roleta as ro
 from . import stats, store, topics
 
-VERSION = "0.4.0"
+VERSION = "0.5.0"
 RATINGS = {1: CardAnswer.AGAIN, 2: CardAnswer.HARD, 3: CardAnswer.GOOD, 4: CardAnswer.EASY}
 # Topic and error sessions run in a filtered deck of their own, emptied and removed at the end.
 TEMP_DECK = "Painel de Estudos (sessão)"
@@ -51,6 +52,7 @@ class Api:
         self.goal_flag = False
         self.ro_undo: dict | None = None  # the Roleta before its last destructive change
         self._home_deck: int | None = None  # Anki's current deck before a topic or error session
+        self._deck_undo: dict | None = None  # the last deck deleted in the panel, for Desfazer
 
     @property
     def col(self):
@@ -81,7 +83,7 @@ class Api:
         store.save(self.col, data)
 
     def _matters(self, data: dict) -> list[tuple[str, int]]:
-        return stats.matter_decks(self.col, data.get("root"))
+        return stats.matter_decks(self.col, data.get("root"), data.get("made"))
 
     def _mapped_roleta(self, data: dict) -> dict:
         state = data["roleta"]
@@ -103,7 +105,7 @@ class Api:
         data = self._data()
         goal = data["goal"]
         progress = stats.goal(self.col, goal["unit"], float(goal["value"]))
-        plan = stats.plan(self.col, data.get("root"))
+        plan = stats.plan(self.col, data.get("root"), data.get("made"))
         due = sum(row["due"] for row in plan)
         state = self._mapped_roleta(data)
         by_deck = self._cat_counts(state)
@@ -155,7 +157,7 @@ class Api:
         if did:
             decks = [int(did)]
         else:
-            decks = [row["did"] for row in stats.plan(self.col, data.get("root")) if row["due"] > 0]
+            decks = [row["did"] for row in stats.plan(self.col, data.get("root"), data.get("made")) if row["due"] > 0]
         self.session = self._new_session(decks, single=bool(did))
         return self._next()
 
@@ -492,6 +494,8 @@ class Api:
         return {
             "did": did,
             "name": stats.leaf(self.col.decks.name(did)),
+            "can_delete": did != 1,  # Anki keeps its default deck
+            "decks": self._subdecks(did),
             "counts": {
                 "new": node.new_count if node else 0,
                 "learn": node.learn_count if node else 0,
@@ -505,6 +509,111 @@ class Api:
             "weak": stats.weak_tags(self.col, dids),
             "roleta": {"cat": cat, "counts": ro.counts(cat["subs"]), "named": ro.has_named_subs(cat)} if cat else None,
         }
+
+    def _subdecks(self, did: int) -> list[dict]:
+        """The decks inside a matéria, in tree order, with their cards and today's cards."""
+        top = self.col.decks.name(did)
+        rows = [(name, int(cid)) for name, cid in self.col.decks.children(did) if not self.col.decks.is_filtered(cid)]
+        if not rows:
+            return []
+        ids = ids2str([did] + [cid for _name, cid in rows])
+        own = dict(
+            self.col.db.all(
+                "select case when odid then odid else did end as home, count() from cards "
+                f"where did in {ids} or odid in {ids} group by home"
+            )
+        )
+        nodes = stats.due_nodes(self.col)
+        rows.sort(key=lambda r: [part.lower() for part in r[0].split("::")])
+        out = []
+        for name, cid in rows:
+            inside = [c for n, c in rows if n.startswith(name + "::")]
+            node = nodes.get(cid)
+            out.append(
+                {
+                    "did": cid,
+                    "name": stats.leaf(name),
+                    "depth": name.count("::") - top.count("::"),
+                    "cards": own.get(cid, 0) + sum(own.get(c, 0) for c in inside),
+                    "due": (node.new_count + node.learn_count + node.review_count) if node else 0,
+                    "kids": len(inside),
+                }
+            )
+        return out
+
+    # ------------------------------------------------------------------ baralhos: renomear e excluir
+    def _changed(self, result: Any) -> None:
+        """Tells Anki's own windows (Procurar, Adicionar) about a change made here, as Anki's operations do."""
+        changes = result if isinstance(result, OpChanges) else getattr(result, "changes", None)
+        if changes is None:
+            return
+        mw.update_undo_actions()
+        gui_hooks.operation_did_execute(changes, self.shell)
+
+    def _normal_deck(self, did: Any) -> int | None:
+        """did as an int when it is an existing normal (not filtered) deck."""
+        try:
+            did = int(did)
+        except (TypeError, ValueError):
+            return None
+        if did <= 0 or not self.col.decks.get(did, default=False) or self.col.decks.is_filtered(did):
+            return None
+        return did
+
+    def deck_rename(self, did: int, name: str) -> dict:
+        """New name for the deck's last level; the deck stays where it is."""
+        did = self._normal_deck(did)
+        if not did:
+            raise UserError("Esse baralho não existe mais.")
+        new = re.sub(r"\s+", " ", str(name or "")).strip()
+        if not new:
+            raise UserError("Escreva o novo nome.")
+        if "::" in new:
+            raise UserError("O nome não pode ter “::”: no Anki isso põe um baralho dentro de outro.")
+        full = self.col.decks.name(did)
+        target = f"{full.rsplit('::', 1)[0]}::{new}" if "::" in full else new
+        if target != full:
+            other = self.col.decks.id_for_name(target)
+            if other and int(other) != did:  # Anki would add a "+" to the name instead
+                raise UserError("Já existe um baralho com esse nome aqui.")
+            self._changed(self.col.decks.rename(did, target))
+        return {"did": did, "name": stats.leaf(self.col.decks.name(did))}
+
+    def deck_delete(self, did: int) -> dict:
+        """Deletes the deck, the decks inside it and their cards, as Anki does; deck_undo brings them back."""
+        did = self._normal_deck(did)
+        if not did:
+            raise UserError("Esse baralho não existe mais.")
+        name = self.col.decks.name(did)
+        if did == 1:
+            raise UserError(f"O Anki não deixa excluir o baralho {name}.")
+        if self.session:
+            self.stop()  # the session may be holding cards of this deck
+        gone = set(stats.subtree(self.col, did))
+        # Roleta matérias linked to these decks lose the link when the panel next looks (auto_map);
+        # kept here so Desfazer can put it back even if the deck's name no longer matches
+        links = [(c["id"], c["deck"], bool(c.get("deck_manual"))) for c in self._data()["roleta"]["cats"] if c.get("deck") in gone]
+        out = self.col.decks.remove([did])
+        # Anki's undo step for this deletion, by its label: saving the panel's settings (not
+        # undoable) moves undo_status().last_step without touching the steps that can be undone
+        self._deck_undo = {"label": self.col.undo_status().undo, "links": links}
+        self._changed(out)
+        return {"name": stats.leaf(name), "cards": int(out.count)}
+
+    def deck_undo(self) -> dict:
+        info, self._deck_undo = self._deck_undo, None
+        status = self.col.undo_status()
+        if not info or not info["label"] or status.undo != info["label"]:
+            raise UserError("Não dá mais para desfazer: o Anki registrou outra mudança depois da exclusão.")
+        self._changed(self.col.undo())
+        if info["links"]:
+            data = self._data()
+            for cat_id, deck, manual in info["links"]:
+                cat = ro.find_cat(data["roleta"], cat_id)
+                if cat and self._normal_deck(deck):
+                    cat["deck"], cat["deck_manual"] = deck, manual
+            self._save(data)
+        return {"ok": True}
 
     # ------------------------------------------------------------------ caderno de erros
     def erros(self, days: int = 7) -> dict:
@@ -598,11 +707,11 @@ class Api:
         """Each card of a deck (and subdecks) with the article it starts with and its law."""
         ids = ids2str(stats.subtree(self.col, did))
         rows = self.col.db.all(
-            "select c.id, c.queue, substr(n.flds, 1, 300), n.tags from cards c join notes n on n.id = c.nid "
-            f"where c.did in {ids} or c.odid in {ids}"
+            "select c.id, c.queue, substr(n.flds, 1, 300), n.tags, case when c.odid then c.odid else c.did end "
+            f"from cards c join notes n on n.id = c.nid where c.did in {ids} or c.odid in {ids}"
         )
         entries = []
-        for cid, queue, start, tags in rows:
+        for cid, queue, start, tags, home in rows:
             law = topics.law_of_tags(tags)
             entries.append(
                 {
@@ -612,6 +721,7 @@ class Api:
                     "law": law[0] if law else None,
                     "law_label": law[1] if law else None,
                     "tags": topics.content_tags(tags),
+                    "home": home,  # the card's own deck, also while it sits in a filtered deck
                 }
             )
         return entries
@@ -627,8 +737,22 @@ class Api:
         return cat, sub, topic, did
 
     def _topic_match(self, cat: dict, sub: dict, topic: dict, did: int, entries: list[dict] | None = None) -> dict:
+        """The topic's cards: the ones its name, law or tag finds, plus the ones in its own deck."""
+        entries = entries if entries is not None else self._card_entries(did)
         names = [sub.get("name") or "", cat["name"], self.col.decks.name(did)]
-        return topics.topic_cards(topic["t"], topic.get("cards"), entries if entries is not None else self._card_entries(did), names)
+        info = topics.topic_cards(topic["t"], topic.get("cards"), entries, names)
+        own_deck = self._topic_deck(topic)
+        if own_deck:
+            inside = set(stats.subtree(self.col, own_deck))
+            own = [e["cid"] for e in entries if e["home"] in inside and e["ok"]]
+            info["own_deck"] = own_deck
+            info["own"] = len(own)
+            if own and not info.get("ambiguous"):
+                have = set(info["cids"])
+                info["cids"] = info["cids"] + [cid for cid in own if cid not in have]
+                if info["mode"] == "none":
+                    info["mode"] = "deck"
+        return info
 
     def _topic_info(self, data: dict, tid: str, with_tags: bool = False) -> dict:
         cat, sub, topic, did = self._topic_lookup(data, tid)
@@ -636,8 +760,10 @@ class Api:
             return {"tid": tid, "mode": "nodeck", "count": 0}
         entries = self._card_entries(did)
         info = self._topic_match(cat, sub, topic, did, entries)
-        out = {k: v for k, v in info.items() if k not in ("cids", "ranges")}
+        out = {k: v for k, v in info.items() if k not in ("cids", "ranges", "own_deck", "own")}
         out.update({"tid": tid, "deck": did, "deck_name": stats.leaf(self.col.decks.name(did)), "count": len(info["cids"])})
+        if info.get("own_deck"):
+            out["topic_deck"] = {"did": info["own_deck"], "path": self._deck_path(info["own_deck"], did), "n": info["own"]}
         if info["mode"] == "tag":
             out["tag_label"] = topics.tag_label(info["tag"])
         if with_tags or info["mode"] == "none" or (info["mode"] == "articles" and not info["cids"] and not info["ambiguous"]):
@@ -651,6 +777,81 @@ class Api:
 
     def roleta_topic_cards(self, tid: str, tags: bool = False) -> dict:
         return self._topic_info(self._data(), tid, with_tags=bool(tags))
+
+    # ------------------------------------------------------------------ roleta: the topic's deck
+    def _topic_deck(self, topic: dict) -> int | None:
+        return self._normal_deck(topic["deck"]) if topic.get("deck") else None
+
+    def _deck_path(self, did: int, matter: int) -> str:
+        """The deck's name from the matéria down, as the Roleta writes paths."""
+        name, top = self.col.decks.name(did), self.col.decks.name(matter)
+        if name == top or name.startswith(top + "::"):
+            name = name[len(top) - len(stats.leaf(top)):]
+        return name.replace("::", " › ")
+
+    def _make_deck(self, name: str, data: dict, like: int | None = None) -> tuple[int, bool]:
+        """The normal deck with this name, made level by level when missing, with the options of like."""
+        found = self.col.decks.id_for_name(name)
+        if found:
+            if self.col.decks.is_filtered(found):
+                raise UserError(f"Já existe um baralho filtrado com o nome {name.replace('::', ' › ')}.")
+            return int(found), False
+        conf = self.col.decks.get(like)["conf"] if like and self.col.decks.get(like, default=False) else None
+        parts = name.split("::")
+        did = 0
+        for i in range(1, len(parts) + 1):
+            level = "::".join(parts[:i])
+            found = self.col.decks.id_for_name(level)
+            if found:
+                did = int(found)
+                continue
+            try:
+                did = int(self.col.decks.id(level))
+            except Exception as err:  # e.g. a filtered deck can't hold other decks
+                raise UserError(f"O Anki não criou o baralho {level.replace('::', ' › ')}: {err}") from err
+            if conf is not None:
+                deck = self.col.decks.get(did)
+                deck["conf"] = conf
+                self.col.decks.save(deck)
+            data["made"].append(did)
+        return did, True
+
+    def _matter_deck(self, data: dict, cat: dict) -> int:
+        """The matéria's deck; made next to the other matérias when the matéria has none yet."""
+        did = self._normal_deck(cat["deck"]) if cat.get("deck") else None
+        if did:
+            return did
+        parent = self._normal_deck(data["root"]) if data.get("root") else None
+        if not parent:
+            matters = self._matters(data)
+            first = self.col.decks.name(matters[0][1]) if matters else ""
+            parent = self._normal_deck(self.col.decks.id_for_name(first.rsplit("::", 1)[0])) if "::" in first else None
+        name = ro.deck_part(cat["name"])
+        if parent:
+            name = f"{self.col.decks.name(parent)}::{name}"
+        did, _created = self._make_deck(name, data)
+        cat["deck"] = did
+        return did
+
+    def roleta_topic_deck(self, tid: str) -> dict:
+        """Estudar on a drawn topic: the topic gets its deck, Matéria::Subcategoria::Tópico."""
+        data = self._data()
+        found = ro.find_topic(self._mapped_roleta(data), tid)
+        if not found:
+            raise UserError("Esse tópico não existe mais.")
+        cat, sub, topic, _i = found
+        made = len(data["made"])
+        matter = self._matter_deck(data, cat)
+        did, created = self._topic_deck(topic), False
+        if not did:
+            name = "::".join([self.col.decks.name(matter), *ro.deck_parts(cat, sub, topic)])
+            did, created = self._make_deck(name, data, like=matter)
+            topic["deck"] = did
+        self._save(data)
+        if len(data["made"]) != made:
+            self._changed(OpChanges(deck=True))
+        self.col.decks.select(DeckId(did))  # Anki's Adicionar cartões starts on the current deck
+        return self._roleta_view(data, {"topic_deck": {"did": did, "created": created, "path": self._deck_path(did, matter)}})
 
     def roleta_link(self, tid: str, link: Any = None) -> dict:
         """link: None to go back to the articles of the name, {"law": key} or {"tag": tag}."""

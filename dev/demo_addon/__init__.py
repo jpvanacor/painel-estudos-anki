@@ -148,6 +148,39 @@ def pick_cat(cat_id):
     js(f"(function(){{var s=document.querySelector('[data-ro-cat]'); s.value={json.dumps(cat_id)}; s.dispatchEvent(new Event('change',{{bubbles:true}}));}})()")
 
 
+def deck_state(label):
+    col = mw.col
+    penal = sorted(d.name for d in col.decks.all_names_and_ids(include_filtered=False) if d.name.startswith("Direito Penal"))
+    data = mw.painel_estudos.api._data()
+    found = [t for c in data["roleta"]["cats"] for s in c["subs"] for t in s["topics"] if t["id"] == data["roleta"].get("last")]
+    topic = found[0] if found else {}
+    log(
+        f"{label}: penal decks={penal} current={col.decks.name(col.decks.get_current_id())} cards={col.card_count()}"
+        f" last topic={topic.get('t')} deck={topic.get('deck')} made={len(data['made'])}"
+    )
+
+
+def open_last_topic():
+    last = mw.painel_estudos.api._data()["roleta"].get("last")
+    js(f"PE.topic({json.dumps(last)})")
+
+
+def click_last(selector):
+    js(f"(function(){{var els=document.querySelectorAll({json.dumps(selector)}); if(els.length) els[els.length-1].click(); else console.log('demo: missing ' + {json.dumps(selector)});}})()")
+
+
+def set_name(text):
+    js(f"(function(){{var i=document.getElementById('ask-name'); if(i) i.value={json.dumps(text)};}})()")
+
+
+def enter_name():
+    js("(function(){var i=document.getElementById('ask-name'); if(i) i.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));})()")
+
+
+def show_decks():
+    js("(function(){var g=document.querySelector('.decks-grid'); if(g) g.scrollIntoView({block:'center'});})()")
+
+
 def render_sounds():
     js("Promise.all(PE.sounds().map(function(n){return PE.renderSound(n, 3);})).then(function(r){window.__sfx=r;})")
 
@@ -298,6 +331,68 @@ STEPS = [
     (lambda: phone_state("phone block off"), 300),
     (lambda: js("document.querySelector('.mobile-status').scrollIntoView({block: 'center'})"), 500),
     (lambda: shot("22c_celular_desligado"), 300),
+    # 0.5: Estudar on a drawn topic makes its deck; then rename and delete on the matéria page
+    (lambda: js("PE.go('roleta')"), 1800),
+    (lambda: pick_cat("c-penal"), 1200),
+    (lambda: click('[data-act="ro-sel"][data-sel="_all"]'), 1200),
+    (lambda: key(" "), 6400),
+    (lambda: shot("34_sorteado"), 300),
+    (lambda: click('[data-act="ro-accept"]'), 1600),
+    (lambda: shot("35_baralho_criado"), 300),
+    (lambda: deck_state("after Estudar"), 300),
+    (open_last_topic, 1600),
+    (lambda: shot("36_topico_com_baralho"), 300),
+    (lambda: key("Escape"), 800),
+    (lambda: js("PE.go('materias')"), 1600),
+    (lambda: open_row("Direito Penal"), 1800),
+    (show_decks, 600),
+    (lambda: shot("37_materia_baralhos"), 300),
+    (lambda: click_last('.decks-grid [data-act="deck-rename"]'), 900),
+    (lambda: set_name("Furto, roubo e extorsão"), 300),
+    (lambda: shot("38_renomear"), 300),
+    (enter_name, 1600),
+    (show_decks, 600),
+    (lambda: shot("39_renomeado"), 300),
+    (lambda: deck_state("after renaming the topic deck"), 300),
+    # a name already in use: the dialog stays open with the message
+    (lambda: click('.actions [data-act="deck-rename"]'), 900),
+    (lambda: set_name("Direito Civil"), 300),
+    (enter_name, 1200),
+    (lambda: shot("40_nome_repetido"), 300),
+    (lambda: report("dialog still open", "JSON.stringify({open: !!document.getElementById('ask-name')})"), 300),
+    (lambda: key("Escape"), 800),
+    # delete the topic's deck, then Desfazer
+    (lambda: click_last('.decks-grid [data-act="deck-delete"]'), 900),
+    (lambda: shot("41_excluir_confirma"), 300),
+    (lambda: click('[data-act="ask-ok"]'), 1800),
+    (lambda: shot("42_excluido_desfazer"), 300),
+    (lambda: deck_state("after deleting the topic deck"), 300),
+    (lambda: click(".toast-act"), 1800),
+    (lambda: deck_state("after Desfazer"), 300),
+    (show_decks, 600),
+    (lambda: shot("43_desfeito"), 300),
+    # rename the matéria itself: the Roleta keeps its link to the deck
+    (lambda: click('.actions [data-act="deck-rename"]'), 900),
+    (lambda: set_name("Direito Penal (CP)"), 300),
+    (enter_name, 1800),
+    (lambda: roleta_state("after renaming the matéria"), 300),
+    # delete the matéria, then Desfazer
+    (lambda: js("var m=document.getElementById('main'); m.scrollTop = m.scrollHeight;"), 500),
+    (lambda: shot("44_rodape_excluir"), 300),
+    (lambda: click('.page-foot [data-act="deck-delete"]'), 900),
+    (lambda: shot("45_excluir_materia"), 300),
+    (lambda: click('[data-act="ask-ok"]'), 2000),
+    (lambda: shot("46_materias_sem_penal"), 300),
+    (lambda: deck_state("after deleting the matéria"), 300),
+    (lambda: click(".toast-act"), 2000),
+    (lambda: shot("47_materia_de_volta"), 300),
+    (lambda: deck_state("after Desfazer"), 300),
+    (lambda: roleta_state("Roleta link after Desfazer"), 300),
+    (lambda: open_row("Direito Penal (CP)"), 1800),
+    (lambda: theme(True), 2200),
+    (show_decks, 600),
+    (lambda: shot("48_materia_escura"), 300),
+    (lambda: theme(False), 1500),
     (lambda: mw.close(), 0),
 ]
 

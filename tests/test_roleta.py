@@ -264,3 +264,34 @@ def test_topic_card_link_is_kept_and_cleaned():
     assert ro.clean_link({"tag": 5}) is None and ro.clean_link("x") is None
     with pytest.raises(ro.RoletaError):
         ro.set_cards_link(state, "nope", None)
+
+
+# ------------------------------------------------------------------ the topic's deck
+def test_topic_deck_parts_follow_the_roleta_levels():
+    state = loaded()
+    leg = next(c for c in state["cats"] if c["name"] == "Legislação Complementar")
+    sub = next(s for s in leg["subs"] if s["name"] == "Lei de Licitações (14.133/21)")
+    assert ro.deck_parts(leg, sub, sub["topics"][0]) == ["Lei de Licitações (14.133/21)", "Princípios"]
+    # no named subcategories: straight to the topic
+    pt = next(c for c in state["cats"] if c["name"] == "Português")
+    assert ro.deck_parts(pt, pt["subs"][0], pt["subs"][0]["topics"][0]) == ["Concordância verbal"]
+    # nested headings become one level each; "::" can't start a level of its own
+    cat = ro.new_cat("Direito Penal")
+    cat["subs"] = [ro.new_sub("Parte especial › Crimes contra o patrimônio"), ro.new_sub("")]
+    topic = ro.new_topic("Furto::qualificado  (Arts. 155 e 156)")
+    assert ro.deck_parts(cat, cat["subs"][0], topic) == ["Parte especial", "Crimes contra o patrimônio", "Furto:qualificado (Arts. 155 e 156)"]
+    # the unnamed subcategory of a matéria that has named ones is "Geral", as the Roleta shows it
+    assert ro.deck_parts(cat, cat["subs"][1], ro.new_topic("Penas")) == ["Geral", "Penas"]
+    assert ro.deck_part("  ::  ") == "Sem nome"
+
+
+def test_topic_deck_id_is_kept_and_cleaned():
+    state = loaded()
+    topic = state["cats"][0]["subs"][0]["topics"][0]
+    topic["deck"] = 1793366243856
+    other = state["cats"][0]["subs"][0]["topics"][1]
+    other["deck"] = "1793366243856"
+    again = ro.load(json.loads(ro.backup_json(state)))
+    kept = again["cats"][0]["subs"][0]["topics"]
+    assert kept[0]["deck"] == 1793366243856
+    assert "deck" not in kept[1]
