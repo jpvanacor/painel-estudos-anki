@@ -3,15 +3,25 @@
 from __future__ import annotations
 
 import copy
+import json
+import os
 import re
 import time
 from collections import Counter
 from typing import Any, Callable
 
 from anki.cards import Card
-from anki.collection import OpChanges, SearchNode
+from anki.collection import (
+    DeckIdLimit,
+    ExportAnkiPackageOptions,
+    ImportAnkiPackageOptions,
+    ImportAnkiPackageRequest,
+    OpChanges,
+    SearchNode,
+)
 from anki.decks import DeckId, FilteredDeckConfig
 from anki.errors import FilteredDeckError
+from anki.import_export_pb2 import ImportAnkiPackageUpdateCondition
 from anki.scheduler.v3 import CardAnswer
 from anki.utils import ids2str
 from aqt import dialogs, gui_hooks, mw
@@ -24,12 +34,13 @@ from . import mobile
 from . import roleta as ro
 from . import stats, store, topics
 
-VERSION = "0.5.0"
+VERSION = "0.6.0"
 RATINGS = {1: CardAnswer.AGAIN, 2: CardAnswer.HARD, 3: CardAnswer.GOOD, 4: CardAnswer.EASY}
 # Topic and error sessions run in a filtered deck of their own, emptied and removed at the end.
 TEMP_DECK = "Painel de Estudos (sessão)"
 ORDER = FilteredDeckConfig.SearchTerm.Order
 ERROR_DAYS = (1, 7, 30)
+RO_UNDO = 20  # Roleta changes that Desfazer (or Ctrl+Z) can take back, one at a time
 _BIDI = dict.fromkeys(map(ord, "⁨⁩"), None)
 WEEKDAYS = ["segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado", "domingo"]
 MONTHS = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"]
@@ -50,9 +61,10 @@ class Api:
         self.result: dict[str, Any] | None = None
         self.queue_counts = (0, 0, 0)
         self.goal_flag = False
-        self.ro_undo: dict | None = None  # the Roleta before its last destructive change
+        # the Roleta before each destructive change, newest last, with the Lixeira entries it made
+        self.ro_undo: list[dict] = []
         self._home_deck: int | None = None  # Anki's current deck before a topic or error session
-        self._deck_undo: dict | None = None  # the last deck deleted in the panel, for Desfazer
+        self._deck_undo: dict | None = None  # the last deck deleted, renamed or moved, for Desfazer
 
     @property
     def col(self):
@@ -71,6 +83,8 @@ class Api:
             "profile": mw.pm.name,
             "fx": data["fx"],
             "reduce_motion": bool(getattr(mw.pm, "reduce_motion", lambda: False)()),
+            "ui": self._ui(),
+            "trash_n": self._trash_n(data),
         }
 
     def _data(self) -> dict:
@@ -560,6 +574,12 @@ class Api:
             return None
         return did
 
+    def _remember_undo(self, trash: str | None = None, links: list | None = None) -> None:
+        """Desfazer for the deck change just made: Anki's undo step, known by its label (saving the
+        panel's settings is not undoable but moves undo_status().last_step, so the step number can't
+        be used)."""
+        self._deck_undo = {"label": self.col.undo_status().undo, "trash": trash, "links": links or []}
+
     def deck_rename(self, did: int, name: str) -> dict:
         """New name for the deck's last level; the deck stays where it is."""
         did = self._normal_deck(did)
@@ -572,15 +592,69 @@ class Api:
             raise UserError("O nome não pode ter “::”: no Anki isso põe um baralho dentro de outro.")
         full = self.col.decks.name(did)
         target = f"{full.rsplit('::', 1)[0]}::{new}" if "::" in full else new
-        if target != full:
+        changed = target != full
+        if changed:
             other = self.col.decks.id_for_name(target)
             if other and int(other) != did:  # Anki would add a "+" to the name instead
                 raise UserError("Já existe um baralho com esse nome aqui.")
             self._changed(self.col.decks.rename(did, target))
-        return {"did": did, "name": stats.leaf(self.col.decks.name(did))}
+            self._remember_undo()
+        return {"did": did, "name": stats.leaf(self.col.decks.name(did)), "changed": changed}
+
+    def _matter_level(self, data: dict) -> int:
+        """The deck the matérias sit in (0: the top level)."""
+        matters = self._matters(data)
+        first = self.col.decks.name(matters[0][1]) if matters else ""
+        if "::" not in first:
+            return 0
+        return int(self.col.decks.id_for_name(first.rsplit("::", 1)[0]) or 0)
+
+    def deck_targets(self, did: int) -> dict:
+        """Where a deck can be moved: every normal deck outside it, and the matérias' level."""
+        did = self._normal_deck(did)
+        if not did:
+            raise UserError("Esse baralho não existe mais.")
+        inside = set(stats.subtree(self.col, did))
+        full = self.col.decks.name(did)
+        parent = int(self.col.decks.id_for_name(full.rsplit("::", 1)[0]) or 0) if "::" in full else 0
+        decks = [
+            {"did": int(d.id), "name": d.name.replace("::", " › "), "depth": d.name.count("::")}
+            for d in self.col.decks.all_names_and_ids(skip_empty_default=True, include_filtered=False)
+            if int(d.id) not in inside
+        ]
+        decks.sort(key=lambda d: [part.lower() for part in d["name"].split(" › ")])
+        return {"did": did, "name": stats.leaf(full), "parent": parent, "level": self._matter_level(self._data()), "decks": decks}
+
+    def deck_move(self, did: int, parent: Any = 0) -> dict:
+        """Puts the deck inside parent (0: at the top level), as dragging a deck does in Anki."""
+        did = self._normal_deck(did)
+        if not did:
+            raise UserError("Esse baralho não existe mais.")
+        target = 0
+        if parent:
+            target = self._normal_deck(parent)
+            if not target:
+                raise UserError("O baralho de destino não existe mais.")
+            if target in stats.subtree(self.col, did):
+                raise UserError("Um baralho não pode ir para dentro dele mesmo.")
+        full = self.col.decks.name(did)
+        leaf = stats.leaf(full)
+        moved = f"{self.col.decks.name(target)}::{leaf}" if target else leaf
+        where = stats.leaf(self.col.decks.name(target)) if target else None
+        if moved == full:
+            return {"name": leaf, "to": where, "changed": False}
+        other = self.col.decks.id_for_name(moved)
+        if other and int(other) != did:  # Anki would add a "+" to the name
+            raise UserError(f"Já existe um baralho chamado {leaf} lá.")
+        if self.session:
+            self.stop()
+        self._changed(self.col.decks.reparent([DeckId(did)], DeckId(target)))
+        self._remember_undo()
+        return {"name": leaf, "to": where, "changed": True}
 
     def deck_delete(self, did: int) -> dict:
-        """Deletes the deck, the decks inside it and their cards, as Anki does; deck_undo brings them back."""
+        """Deletes the deck, the decks inside it and their cards, as Anki does. A copy goes to the
+        Lixeira first; deck_undo (right after) or trash_restore (for 30 days) bring them back."""
         did = self._normal_deck(did)
         if not did:
             raise UserError("Esse baralho não existe mais.")
@@ -589,30 +663,227 @@ class Api:
             raise UserError(f"O Anki não deixa excluir o baralho {name}.")
         if self.session:
             self.stop()  # the session may be holding cards of this deck
+        data = self._data()
         gone = set(stats.subtree(self.col, did))
         # Roleta matérias linked to these decks lose the link when the panel next looks (auto_map);
         # kept here so Desfazer can put it back even if the deck's name no longer matches
-        links = [(c["id"], c["deck"], bool(c.get("deck_manual"))) for c in self._data()["roleta"]["cats"] if c.get("deck") in gone]
+        links = [(c["id"], c["deck"], bool(c.get("deck_manual"))) for c in data["roleta"]["cats"] if c.get("deck") in gone]
+        entry = self._keep_deck_copy(did, gone, data)
         out = self.col.decks.remove([did])
-        # Anki's undo step for this deletion, by its label: saving the panel's settings (not
-        # undoable) moves undo_status().last_step without touching the steps that can be undone
-        self._deck_undo = {"label": self.col.undo_status().undo, "links": links}
+        self._remember_undo(trash=entry["id"], links=links)
         self._changed(out)
-        return {"name": stats.leaf(name), "cards": int(out.count)}
+        return {"name": stats.leaf(name), "cards": int(out.count), "trash_n": self._trash_n(data)}
 
     def deck_undo(self) -> dict:
         info, self._deck_undo = self._deck_undo, None
         status = self.col.undo_status()
         if not info or not info["label"] or status.undo != info["label"]:
-            raise UserError("Não dá mais para desfazer: o Anki registrou outra mudança depois da exclusão.")
+            raise UserError("Não dá mais para desfazer: o Anki registrou outra mudança depois.")
         self._changed(self.col.undo())
+        data = self._data()
         if info["links"]:
-            data = self._data()
             for cat_id, deck, manual in info["links"]:
                 cat = ro.find_cat(data["roleta"], cat_id)
                 if cat and self._normal_deck(deck):
                     cat["deck"], cat["deck_manual"] = deck, manual
             self._save(data)
+        if info["trash"]:  # the deck is back, so its copy leaves the Lixeira
+            self._drop_deck_copy(info["trash"])
+        return {"ok": True, "trash_n": self._trash_n(data)}
+
+    # ------------------------------------------------------------------ lixeira
+    # Roleta entries live with the panel's data in the collection (they sync with it). Deleted
+    # decks are kept as .apkg copies, with scheduling and review history, in the add-on's
+    # user_files folder, which Anki keeps when the add-on is updated; they stay on this computer.
+    def _user_files(self, *parts: str) -> str:
+        root = getattr(self.shell, "files_root", None)
+        if not root:
+            root = os.path.join(mw.addonManager.addonsFolder(self.shell.addon), "user_files")
+        path = os.path.join(root, *parts)
+        os.makedirs(path, exist_ok=True)
+        return path
+
+    def _deck_copies(self) -> list[dict]:
+        """The Lixeira's decks, newest first; copies older than the Lixeira keeps them are deleted."""
+        folder = self._user_files("lixeira")
+        try:
+            with open(os.path.join(folder, "baralhos.json"), encoding="utf-8") as handle:
+                items = json.load(handle)
+        except (OSError, ValueError):
+            items = []
+        oldest = ro.now_ms() - ro.TRASH_DAYS * ro.DAY_MS
+        keep = []
+        for item in items if isinstance(items, list) else []:
+            if not isinstance(item, dict) or not isinstance(item.get("file"), str):
+                continue
+            path = os.path.join(folder, os.path.basename(item["file"]))
+            if item.get("when", 0) < oldest or not os.path.exists(path):
+                if os.path.exists(path):
+                    os.remove(path)
+                continue
+            keep.append(item)
+        if len(keep) != len(items if isinstance(items, list) else []):
+            self._save_deck_copies(keep)
+        return keep
+
+    def _save_deck_copies(self, items: list[dict]) -> None:
+        path = os.path.join(self._user_files("lixeira"), "baralhos.json")
+        with open(path + ".tmp", "w", encoding="utf-8") as handle:
+            json.dump(items, handle, ensure_ascii=False, indent=1)
+        os.replace(path + ".tmp", path)
+
+    def _keep_deck_copy(self, did: int, gone: set[int], data: dict) -> dict:
+        folder = self._user_files("lixeira")
+        name = f"{time.strftime('%Y%m%d-%H%M%S')}-{did}.apkg"
+        ids = ids2str(gone)
+        cards = int(self.col.db.scalar(f"select count() from cards where did in {ids} or odid in {ids}") or 0)
+        try:
+            self.col.export_anki_package(
+                out_path=os.path.join(folder, name),
+                options=ExportAnkiPackageOptions(with_scheduling=True, with_deck_configs=True, with_media=False, legacy=False),
+                limit=DeckIdLimit(deck_id=DeckId(did)),
+            )
+        except Exception as err:
+            raise UserError(f"O baralho não foi excluído: não deu para guardar a cópia dele na Lixeira ({err}).") from err
+        names = {d: self.col.decks.name(d) for d in gone}
+        cats = data["roleta"]["cats"]
+        entry = {
+            "id": ro.uid(),
+            "kind": "deck",
+            "when": ro.now_ms(),
+            "label": stats.leaf(names[did]),
+            "where": names[did].rsplit("::", 1)[0].replace("::", " › ") if "::" in names[did] else "",
+            "full": names[did],
+            "cards": cards,
+            "file": name,
+            # Anki's export only carries decks that have cards; the empty ones are made again by name
+            "decks": sorted(names.values(), key=lambda n: n.count("::")),
+            # to link the Roleta again after a restore, by name: the restored decks get new ids
+            "links": [[c["id"], names[c["deck"]]] for c in cats if c.get("deck") in gone],
+            "topics": [[t["id"], names[t["deck"]]] for c in cats for s in c["subs"] for t in s["topics"] if t.get("deck") in gone],
+        }
+        self._save_deck_copies([entry] + self._deck_copies())
+        return entry
+
+    def _drop_deck_copy(self, entry_id: str) -> dict | None:
+        items = self._deck_copies()
+        entry = next((i for i in items if i["id"] == entry_id), None)
+        if entry:
+            path = os.path.join(self._user_files("lixeira"), os.path.basename(entry["file"]))
+            if os.path.exists(path):
+                os.remove(path)
+            self._save_deck_copies([i for i in items if i["id"] != entry_id])
+        return entry
+
+    def _trash_n(self, data: dict) -> int:
+        return len(data["trash"]) + len(self._deck_copies())
+
+    def trash(self) -> dict:
+        data = self._data()
+        items = [
+            {k: t.get(k) for k in ("id", "kind", "when", "label", "where", "n", "cats_n")}
+            for t in data["trash"]
+        ]
+        items += [{k: t.get(k) for k in ("id", "kind", "when", "label", "where", "cards")} for t in self._deck_copies()]
+        items.sort(key=lambda t: -(t.get("when") or 0))
+        return {"items": items, "days": ro.TRASH_DAYS, "trash_n": len(items)}
+
+    def trash_restore(self, id: str) -> dict:
+        deck = next((t for t in self._deck_copies() if t["id"] == id), None)
+        if deck:
+            msg = self._restore_deck(deck)
+        else:
+            data = self._data()
+            self._mapped_roleta(data)
+            item = next((t for t in data["trash"] if t["id"] == id), None)
+            if not item:
+                raise UserError("Esse item não está mais na Lixeira.")
+            snapshot = copy.deepcopy(data["roleta"])
+            try:
+                result = ro.restore(data["roleta"], item)
+            except ro.RoletaError as err:
+                raise UserError(str(err)) from err
+            replaced = result.get("replaced")
+            data["trash"] = ro.clean_trash(([replaced] if replaced else []) + [t for t in data["trash"] if t["id"] != id])
+            self._push_ro_undo(snapshot, added=[replaced["id"]] if replaced else [], removed=[item])
+            self._save(data)
+            msg = result["msg"]
+        out = self.trash()
+        out["toast"] = msg
+        out["can_undo"] = bool(self.ro_undo) and not deck
+        return out
+
+    def _restore_deck(self, entry: dict) -> str:
+        path = os.path.join(self._user_files("lixeira"), os.path.basename(entry["file"]))
+        if not os.path.exists(path):
+            self._drop_deck_copy(entry["id"])
+            raise UserError("A cópia desse baralho não está mais na Lixeira.")
+        if self.session:
+            self.stop()
+        same = ImportAnkiPackageUpdateCondition.IMPORT_ANKI_PACKAGE_UPDATE_CONDITION_IF_NEWER
+        request = ImportAnkiPackageRequest(
+            package_path=path,
+            options=ImportAnkiPackageOptions(
+                merge_notetypes=False, update_notes=same, update_notetypes=same, with_scheduling=True, with_deck_configs=True
+            ),
+        )
+        try:
+            result = self.col.import_anki_package(request)
+        except Exception as err:
+            raise UserError(f"Não deu para restaurar o baralho: {err}") from err
+        self._changed(result)
+        data = self._data()
+        top = self.col.decks.id_for_name(entry.get("full") or "")
+        for name in entry.get("decks") or []:
+            if isinstance(name, str) and name and not self.col.decks.id_for_name(name):
+                self._make_deck(name, data, like=int(top) if top else None)
+        for cat_id, name in entry.get("links") or []:
+            did, cat = self.col.decks.id_for_name(name), ro.find_cat(data["roleta"], cat_id)
+            if did and cat:
+                cat["deck"] = int(did)
+        for tid, name in entry.get("topics") or []:
+            did, found = self.col.decks.id_for_name(name), ro.find_topic(data["roleta"], tid)
+            if did and found:
+                found[2]["deck"] = int(did)
+        self._save(data)
+        self._drop_deck_copy(entry["id"])
+        cards = int(entry.get("cards") or 0)
+        return f"Baralho restaurado: {entry['label']}" + (f", com {ro.plural(cards, 'cartão', 'cartões')}." if cards else ".")
+
+    def trash_delete(self, id: str) -> dict:
+        """Apagar de vez: the item leaves the Lixeira and can't come back."""
+        if not self._drop_deck_copy(id):
+            data = self._data()
+            data["trash"] = [t for t in data["trash"] if t["id"] != id]
+            self._save(data)
+        return self.trash()
+
+    def trash_empty(self) -> dict:
+        for item in self._deck_copies():
+            self._drop_deck_copy(item["id"])
+        data = self._data()
+        data["trash"] = []
+        self._save(data)
+        return self.trash()
+
+    # ------------------------------------------------------------------ page state on this computer
+    def _ui(self) -> dict:
+        try:
+            with open(os.path.join(self._user_files(), "ui.json"), encoding="utf-8") as handle:
+                ui = json.load(handle)
+        except (OSError, ValueError):
+            return {}
+        return ui if isinstance(ui, dict) else {}
+
+    def ui_set(self, folds: Any = None) -> dict:
+        """What is folded on the page, kept on this computer (not in the collection, so no sync)."""
+        ui = self._ui()
+        if isinstance(folds, dict):
+            ui["folds"] = {str(k)[:120]: True for k, v in list(folds.items())[:2000] if v}
+        path = os.path.join(self._user_files(), "ui.json")
+        with open(path + ".tmp", "w", encoding="utf-8") as handle:
+            json.dump(ui, handle, ensure_ascii=False)
+        os.replace(path + ".tmp", path)
         return {"ok": True}
 
     # ------------------------------------------------------------------ caderno de erros
@@ -894,14 +1165,16 @@ class Api:
         view = {
             "state": data["roleta"],
             "decks": [{"id": did, "name": name} for name, did in self._matters(data)],
-            "can_undo": self.ro_undo is not None,
+            "can_undo": bool(self.ro_undo),
             "fx": data["fx"],
+            "trash_n": self._trash_n(data),
         }
         if extra:
             view.update(extra)
         return view
 
     def _ro_change(self, fn: Callable[[dict], Any], undoable: bool = False) -> dict:
+        """Runs fn on the Roleta and saves it. fn may return "_trash": Lixeira entries for what it removed."""
         data = self._data()
         self._mapped_roleta(data)
         snapshot = copy.deepcopy(data["roleta"]) if undoable else None
@@ -909,10 +1182,18 @@ class Api:
             extra = fn(data["roleta"])
         except ro.RoletaError as err:
             raise UserError(str(err)) from err
+        extra = dict(extra) if isinstance(extra, dict) else {}
+        trashed = [t for t in extra.pop("_trash", None) or [] if t]
+        if trashed:
+            data["trash"] = ro.clean_trash(trashed + data["trash"])
         if undoable:
-            self.ro_undo = snapshot
+            self._push_ro_undo(snapshot, added=[t["id"] for t in trashed])
         self._save(data)
-        return self._roleta_view(data, extra if isinstance(extra, dict) else None)
+        return self._roleta_view(data, extra or None)
+
+    def _push_ro_undo(self, roleta: dict, added: list[str] | None = None, removed: list[dict] | None = None) -> None:
+        self.ro_undo.append({"roleta": roleta, "added": added or [], "removed": removed or []})
+        del self.ro_undo[:-RO_UNDO]
 
     def roleta(self) -> dict:
         data = self._data()
@@ -950,7 +1231,11 @@ class Api:
         return self._ro_change(lambda s: {"name": ro.rename_topic(s, tid, name)})
 
     def roleta_remove(self, tid: str) -> dict:
-        return self._ro_change(lambda s: {"toast": f"Removido: {ro.remove_topic(s, tid)}"}, undoable=True)
+        def run(s: dict) -> dict:
+            item = ro.trash_topic(s, tid)
+            return {"toast": f"Removido: {ro.remove_topic(s, tid)}", "_trash": [item]}
+
+        return self._ro_change(run, undoable=True)
 
     def roleta_add(self, cat: str, name: str, sub: str | None = None) -> dict:
         return self._ro_change(lambda s: {"added": ro.add_topic(s, cat, sub, name)["id"]})
@@ -959,15 +1244,21 @@ class Api:
         """deck: a deck id, None to unlink, or "keep" to leave the link (or the automatic match) as is."""
 
         def run(s: dict) -> dict:
+            keep = {x.get("id") for x in subs or [] if isinstance(x, dict) and x.get("id")}
+            trashed = ro.trash_subs(s, cat, keep) if cat else []
             result = ro.save_cat(s, cat, name, subs)
             if deck != "keep":
                 ro.link_deck(s, result["cat"], deck)
-            return result
+            return {**result, "_trash": trashed}
 
         return self._ro_change(run, undoable=cat is not None)
 
     def roleta_delete_cat(self, cat: str) -> dict:
-        return self._ro_change(lambda s: {"deleted": ro.delete_cat(s, cat)}, undoable=True)
+        def run(s: dict) -> dict:
+            item = ro.trash_cat(s, cat)
+            return {"deleted": ro.delete_cat(s, cat), "_trash": [item]}
+
+        return self._ro_change(run, undoable=True)
 
     def roleta_inspect(self, text: str) -> dict:
         try:
@@ -976,7 +1267,12 @@ class Api:
             raise UserError(str(err)) from err
 
     def roleta_import(self, text: str) -> dict:
-        return self._ro_change(lambda s: {"imported": ro.import_text(s, text)}, undoable=True)
+        def run(s: dict) -> dict:
+            before = ro.trash_roleta(s, "Roleta antes de importar um backup")
+            result = ro.import_text(s, text)
+            return {"imported": result, "_trash": [before] if result.get("kind") == "backup" else []}
+
+        return self._ro_change(run, undoable=True)
 
     def roleta_file(self) -> dict:
         path, _filter = QFileDialog.getOpenFileName(mw, "Importar na Roleta", "", "JSON ou texto (*.json *.txt);;Todos os arquivos (*)")
@@ -1002,17 +1298,22 @@ class Api:
         return {"ok": True}
 
     def roleta_clear(self) -> dict:
-        def run(s: dict) -> None:
+        def run(s: dict) -> dict:
+            item = ro.trash_roleta(s, "Roleta apagada")
             s.update(ro.empty())
+            return {"_trash": [item]}
 
         return self._ro_change(run, undoable=True)
 
     def roleta_undo(self) -> dict:
-        if self.ro_undo is None:
+        if not self.ro_undo:
             raise UserError("Não há nada para desfazer na Roleta.")
+        step = self.ro_undo.pop()
         data = self._data()
-        data["roleta"] = self.ro_undo
-        self.ro_undo = None
+        data["roleta"] = step["roleta"]
+        # what that change sent to the Lixeira is back, and what it took out of it goes back in
+        gone = set(step["added"])
+        data["trash"] = ro.clean_trash(step["removed"] + [t for t in data["trash"] if t["id"] not in gone])
         self._save(data)
         return self._roleta_view(data, {"toast": "Desfeito."})
 

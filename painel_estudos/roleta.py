@@ -748,3 +748,215 @@ def topics_json(state: Roleta) -> str:
             for s in named:
                 out[f"{cat['name']} > {s['name']}"] = [t["t"] for t in s["topics"]]
     return json.dumps(out, ensure_ascii=False, indent=2)
+
+
+# ------------------------------------------------------------------ lixeira (what was removed)
+# Entries keep what the Roleta removed, newest first, so it can be put back:
+#   {"id", "kind": "topic" | "sub" | "cat" | "roleta", "when" (ms), "label", ...what was removed}
+TRASH_DAYS = 30
+TRASH_MAX = 200
+TRASH_SNAPSHOTS = 5  # whole Roletas kept (before a backup import or Apagar tudo)
+DAY_MS = 86400 * 1000
+
+
+def _ref(d: dict) -> dict:
+    return {"id": d["id"], "name": d["name"]}
+
+
+def trash_topic(state: Roleta, tid: str, now: int | None = None) -> dict:
+    """The Lixeira entry for a topic, taken before it is removed."""
+    found = find_topic(state, tid)
+    if not found:
+        raise RoletaError("Esse tópico não está mais na roleta.")
+    cat, sub, topic, i = found
+    return {
+        "id": uid(), "kind": "topic", "when": now or now_ms(), "label": topic["t"], "where": path_of(cat, sub),
+        "cat": _ref(cat), "sub": _ref(sub), "pos": i, "topic": copy.deepcopy(topic),
+    }
+
+
+def trash_cat(state: Roleta, cat_id: str, now: int | None = None) -> dict | None:
+    cat = find_cat(state, cat_id)
+    if not cat:
+        return None
+    return {
+        "id": uid(), "kind": "cat", "when": now or now_ms(), "label": cat["name"], "where": "",
+        "n": len(items_of(cat["subs"])), "pos": state["cats"].index(cat), "cat": copy.deepcopy(cat),
+    }
+
+
+def trash_subs(state: Roleta, cat_id: str, keep_ids: set, now: int | None = None) -> list[dict]:
+    """Entries for the subcategories with topics that Organizar is about to delete."""
+    cat = find_cat(state, cat_id)
+    if not cat:
+        return []
+    return [
+        {
+            "id": uid(), "kind": "sub", "when": now or now_ms(), "label": sub["name"] or "Geral", "where": cat["name"],
+            "n": len(sub["topics"]), "cat": _ref(cat), "pos": i, "sub": copy.deepcopy(sub),
+        }
+        for i, sub in enumerate(cat["subs"])
+        if sub["id"] not in keep_ids and sub["topics"]
+    ]
+
+
+def trash_roleta(state: Roleta, label: str, now: int | None = None) -> dict | None:
+    if not state["cats"]:
+        return None
+    return {
+        "id": uid(), "kind": "roleta", "when": now or now_ms(), "label": label, "where": "",
+        "n": len(items_of([s for c in state["cats"] for s in c["subs"]])), "cats_n": len(state["cats"]),
+        "cats": copy.deepcopy(state["cats"]),
+    }
+
+
+def clean_trash(raw: Any, now: int | None = None) -> list[dict]:
+    """Known entries of the last TRASH_DAYS days, newest first as stored, within the limits."""
+    if not isinstance(raw, list):
+        return []
+    oldest = (now or now_ms()) - TRASH_DAYS * DAY_MS
+    out: list[dict] = []
+    snapshots = 0
+    for t in raw:
+        if not isinstance(t, dict) or t.get("kind") not in ("topic", "sub", "cat", "roleta") or not isinstance(t.get("id"), str):
+            continue
+        when = t.get("when")
+        if isinstance(when, bool) or not isinstance(when, (int, float)) or when < oldest:
+            continue
+        if t["kind"] == "roleta":
+            if snapshots >= TRASH_SNAPSHOTS:
+                continue
+            snapshots += 1
+        out.append(t)
+        if len(out) >= TRASH_MAX:
+            break
+    return out
+
+
+def _all_ids(state: Roleta) -> set[str]:
+    ids: set[str] = set()
+    for c in state["cats"]:
+        ids.add(c["id"])
+        for s in c["subs"]:
+            ids.add(s["id"])
+            ids.update(t["id"] for t in s["topics"])
+    return ids
+
+
+def _fresh_ids(obj: dict, ids: set[str]) -> None:
+    """Gives obj (a cat, sub or topic, with what is inside) ids that the Roleta doesn't use yet."""
+    if not obj.get("id") or obj["id"] in ids:
+        new = uid()
+        while new in ids:
+            new = uid()
+        obj["id"] = new
+    ids.add(obj["id"])
+    for s in obj.get("subs", []):
+        _fresh_ids(s, ids)
+    for t in obj.get("topics", []):
+        _fresh_ids(t, ids)
+
+
+def _cat_for(state: Roleta, ref: dict) -> dict:
+    cat = find_cat(state, ref.get("id")) or next((c for c in state["cats"] if norm(c["name"]) == norm(ref.get("name"))), None)
+    if not cat:
+        cat = new_cat(clean(ref.get("name")) or "Matéria")
+        state["cats"].append(cat)
+    return cat
+
+
+def _sub_for(cat: dict, ref: dict, create: bool = True) -> dict | None:
+    sub = next((s for s in cat["subs"] if s["id"] == ref.get("id")), None)
+    sub = sub or next((s for s in cat["subs"] if norm(s["name"]) == norm(ref.get("name"))), None)
+    if not sub and create:
+        sub = new_sub(clean(ref.get("name")))
+        cat["subs"].append(sub)
+    return sub
+
+
+def _tidy_subs(cat: dict) -> None:
+    # the unnamed subcategory goes away when it is empty and named ones are there (as in import)
+    if len(cat["subs"]) > 1:
+        cat["subs"] = [s for s in cat["subs"] if s["name"] or s["topics"]] or [new_sub("")]
+
+
+def _merge_topics(sub: dict, topics: list[dict], ids: set[str]) -> int:
+    have = {norm(t["t"]) for t in sub["topics"]}
+    added = 0
+    for t in topics:
+        if norm(t["t"]) in have:
+            continue
+        t = copy.deepcopy(t)
+        _fresh_ids(t, ids)
+        sub["topics"].append(t)
+        have.add(norm(t["t"]))
+        added += 1
+    return added
+
+
+def restore(state: Roleta, item: dict) -> dict:
+    """Puts a Lixeira entry back. Returns {"msg", "cat"} and, for a whole Roleta, "replaced":
+    the entry for the Roleta it replaced, so that one goes to the Lixeira in turn."""
+    kind = item.get("kind")
+    ids = _all_ids(state)
+    if kind == "topic":
+        cleaned = sanitize_cats([{"name": "x", "subs": [{"name": "", "topics": [item.get("topic")]}]}])
+        topics = cleaned[0]["subs"][0]["topics"] if cleaned else []
+        if not topics:
+            raise RoletaError("Esse item da Lixeira está vazio.")
+        topic = topics[0]
+        cat = _cat_for(state, item.get("cat") or {})
+        sub = _sub_for(cat, item.get("sub") or {})
+        if any(norm(t["t"]) == norm(topic["t"]) for t in sub["topics"]):
+            raise RoletaError(f"{topic['t']} já está na Roleta.")
+        _fresh_ids(topic, ids)
+        pos = item.get("pos") if isinstance(item.get("pos"), int) else len(sub["topics"])
+        sub["topics"].insert(max(0, min(pos, len(sub["topics"]))), topic)
+        _tidy_subs(cat)
+        return {"msg": f"Restaurado: {topic['t']}", "cat": cat["id"]}
+    if kind == "sub":
+        cleaned = sanitize_cats([{"name": "x", "subs": [item.get("sub")]}])
+        if not cleaned:
+            raise RoletaError("Esse item da Lixeira está vazio.")
+        sub = cleaned[0]["subs"][0]
+        cat = _cat_for(state, item.get("cat") or {})
+        existing = _sub_for(cat, sub, create=False)
+        if existing:
+            n = _merge_topics(existing, sub["topics"], ids)
+        else:
+            _fresh_ids(sub, ids)
+            pos = item.get("pos") if isinstance(item.get("pos"), int) else len(cat["subs"])
+            cat["subs"].insert(max(0, min(pos, len(cat["subs"]))), sub)
+            n = len(sub["topics"])
+        _tidy_subs(cat)
+        return {"msg": f"Restaurada: {sub['name'] or 'Geral'}, com {plural(n, 'tópico', 'tópicos')}", "cat": cat["id"]}
+    if kind == "cat":
+        cleaned = sanitize_cats([item.get("cat")])
+        if not cleaned:
+            raise RoletaError("Esse item da Lixeira está vazio.")
+        cat = cleaned[0]
+        existing = find_cat(state, cat["id"]) or next((c for c in state["cats"] if norm(c["name"]) == norm(cat["name"])), None)
+        if existing:
+            n = 0
+            for sub in cat["subs"]:
+                target = _sub_for(existing, sub)
+                n += _merge_topics(target, sub["topics"], ids)
+            _tidy_subs(existing)
+            cat = existing
+        else:
+            _fresh_ids(cat, ids)
+            pos = item.get("pos") if isinstance(item.get("pos"), int) else len(state["cats"])
+            state["cats"].insert(max(0, min(pos, len(state["cats"]))), cat)
+            n = len(items_of(cat["subs"]))
+        state["ui"]["cat"] = cat["id"]
+        return {"msg": f"Restaurada: {cat['name']}, com {plural(n, 'tópico', 'tópicos')}", "cat": cat["id"]}
+    if kind == "roleta":
+        replaced = trash_roleta(state, "Roleta antes de restaurar da Lixeira")
+        cats = sanitize_cats(item.get("cats"))
+        if not cats:
+            raise RoletaError("Esse item da Lixeira está vazio.")
+        state["cats"] = cats
+        state["ui"]["cat"] = cats[0]["id"]
+        state["last"] = None
+        return {"msg": "Roleta restaurada.", "cat": cats[0]["id"], "replaced": replaced}
+    raise RoletaError("Esse item da Lixeira não pode ser restaurado.")

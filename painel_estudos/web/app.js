@@ -23,6 +23,10 @@
     reason: null, // why the current card was missed, chosen after a wrong answer
     returnTo: null, // where Encerrar goes after a topic or error session
     errDays: 7,
+    folds: {}, // what is folded on the page ({key: true}), kept on this computer
+    trashN: 0, // items in the Lixeira
+    lastUndo: null, // what Ctrl+Z does outside study: the last Desfazer offered
+    drag: null, // the deck being dragged: {did, name}
   };
 
   // ---------------------------------------------------------------- helpers
@@ -86,13 +90,24 @@
   }
 
   let toastTimer;
+  const hideToastLater = (el, ms) => {
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => (el.hidden = true), ms);
+  };
   function toast(message, opts = {}) {
     let el = document.querySelector(".toast");
     if (!el) {
       el = document.createElement("div");
       el.className = "toast";
       el.setAttribute("role", "status");
-      el.innerHTML = '<span class="toast-msg"></span><button class="toast-act" type="button" hidden></button>';
+      el.innerHTML = `<span class="toast-msg"></span><button class="toast-act" type="button" hidden></button><button class="toast-x" type="button" aria-label="Fechar" title="Fechar">${ICON.x}</button>`;
+      // it stays while the mouse is over it, and goes a moment after the mouse leaves
+      el.addEventListener("mouseenter", () => clearTimeout(toastTimer));
+      el.addEventListener("mouseleave", () => hideToastLater(el, 2500));
+      el.querySelector(".toast-x").addEventListener("click", () => {
+        clearTimeout(toastTimer);
+        el.hidden = true;
+      });
       document.body.appendChild(el);
     }
     el.querySelector(".toast-msg").textContent = message;
@@ -103,14 +118,24 @@
       act.textContent = opts.action.label;
       act.onclick = () => {
         el.hidden = true;
+        if (S.lastUndo === opts.action.fn) S.lastUndo = null;
         opts.action.fn();
       };
+      if (opts.action.label === "Desfazer") S.lastUndo = opts.action.fn; // Ctrl+Z does it later too
     }
     el.classList.toggle("error", !!opts.error);
     el.hidden = false;
     animate(el, "toast-in");
-    clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => (el.hidden = true), opts.error || opts.action ? 6500 : 2800);
+    hideToastLater(el, opts.action ? 10000 : opts.error ? 6500 : 2800);
+  }
+
+  function runLastUndo() {
+    const fn = S.lastUndo;
+    if (!fn) return toast("Nada para desfazer agora.");
+    S.lastUndo = null;
+    const el = document.querySelector(".toast");
+    if (el) el.hidden = true;
+    fn();
   }
 
   const ICON = (() => {
@@ -123,6 +148,7 @@
       undo: svg('<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>', 16),
       trash: svg('<path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v5M14 11v5"/>', 16),
       edit: svg('<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/>', 16),
+      move: svg('<path d="M4 12h12M12 6l6 6-6 6"/><path d="M20 4v16"/>', 16),
       x: svg('<path d="M18 6 6 18M6 6l12 12"/>', 16),
     };
   })();
@@ -438,6 +464,76 @@
     return el;
   }
 
+  // ---------------------------------------------------------------- folding
+  // Click a section's title to fold it. What is folded is saved on this computer (ui_set).
+  const CHEVRON = `<svg class="fold-chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>`;
+  const isFolded = (key) => !!S.folds[key];
+
+  function foldHead(key, title, meta = "") {
+    return `<div class="section-head"><h2><button class="fold-btn" data-act="fold" data-key="${esc(key)}" aria-expanded="${!isFolded(key)}">${CHEVRON}<span>${title}</span></button></h2>${meta}</div>`;
+  }
+
+  // title and meta are HTML already escaped by the caller
+  function foldSection(key, title, meta, body, cls = "") {
+    return `<section class="section foldable ${cls} ${isFolded(key) ? "folded" : ""}" data-fold="${esc(key)}">${foldHead(key, title, meta)}<div class="fold-body">${body}</div></section>`;
+  }
+
+  let foldTimer = null;
+  function toggleFold(btn) {
+    const key = btn.dataset.key;
+    if (S.folds[key]) delete S.folds[key];
+    else S.folds[key] = true;
+    const now = isFolded(key);
+    document.querySelectorAll(`[data-act="fold"][data-key="${CSS.escape(key)}"]`).forEach((b) => b.setAttribute("aria-expanded", String(!now)));
+    document.querySelectorAll(`[data-fold="${CSS.escape(key)}"]`).forEach((el) => el.classList.toggle("folded", now));
+    if (key.startsWith("d.")) applyDeckFolds();
+    if (key.startsWith("s.") && S.view === "roleta") renderPanel();
+    clearTimeout(foldTimer);
+    foldTimer = setTimeout(() => api("ui_set", { folds: S.folds }, { quiet: true }).catch(() => {}), 400);
+  }
+
+  // ---------------------------------------------------------------- shortcuts
+  const SHORTCUTS = [
+    [
+      "Em qualquer tela",
+      [
+        ["?", "mostra esta lista"],
+        ["Ctrl+Z", "fora do estudo, desfaz a última ação do painel: baralho excluído, renomeado ou movido, ou mudança na Roleta"],
+        ["Esc", "fecha a janela aberta"],
+      ],
+    ],
+    [
+      "Estudo",
+      [
+        ["C ou E", "responde Certo ou Errado"],
+        ["A a E", "escolhe a alternativa"],
+        ["Espaço ou Enter", "mostra a resposta; depois, Bom (ou Continuar, se errou)"],
+        ["1 a 4", "De novo, Difícil, Bom ou Fácil"],
+        ["N, C, A ou P", "depois de errar: Não sabia, Confundi, Falta de atenção ou Pegadinha"],
+        ["R", "repete o áudio"],
+        ["Ctrl+Z", "desfaz a última resposta"],
+        ["Esc", "encerra a sessão"],
+      ],
+    ],
+    [
+      "Roleta",
+      [
+        ["Espaço", "gira"],
+        ["Enter", "no campo Novo tópico, adiciona"],
+      ],
+    ],
+  ];
+
+  function openShortcuts() {
+    if (overlays.some((o) => o.el._shortcuts)) return;
+    const groups = SHORTCUTS.map(
+      ([title, rows]) => `<h4>${esc(title)}</h4><dl class="keys">${rows.map(([k, v]) => `<dt><kbd>${esc(k)}</kbd></dt><dd>${esc(v)}</dd>`).join("")}</dl>`
+    ).join("");
+    const el = overlay(`<div class="dialog shortcuts-dialog" role="dialog" aria-modal="true" aria-labelledby="sc-title"><h3 id="sc-title">Atalhos</h3>${groups}
+      <div class="actions end top-gap"><button class="btn primary" data-act="dlg-close">Fechar</button></div></div>`);
+    el._shortcuts = true;
+  }
+
   // ---------------------------------------------------------------- frame and navigation
   const NAV = [
     ["home", "Hoje"],
@@ -445,6 +541,7 @@
     ["roleta", "Roleta"],
     ["erros", "Caderno de erros"],
     ["ajustes", "Ajustes"],
+    ["lixeira", "Lixeira"],
   ];
   const ANKI = [
     ["add", "Adicionar cartões"],
@@ -458,14 +555,29 @@
     const current = S.view === "materia" ? "materias" : S.view;
     return `<nav class="rail" aria-label="Seções">
       <div class="brand"><span class="bubble full" aria-hidden="true"></span>Painel de Estudos</div>
-      ${NAV.map(([v, label]) => `<button class="nav-item" data-go="${v}" ${current === v ? 'aria-current="page"' : ""}>${label}</button>`).join("")}
+      ${NAV.map(
+        ([v, label]) =>
+          `<button class="nav-item" data-go="${v}" ${current === v ? 'aria-current="page"' : ""}>${label}${v === "lixeira" ? trashBadge() : ""}</button>`
+      ).join("")}
       <div class="rail-sep"></div>
       <div class="rail-group">Janelas do Anki</div>
       ${ANKI.map(([w, label]) => `<button class="nav-item" data-open="${w}">${w === "sync" && S.syncing ? "Sincronizando…" : label}</button>`).join("")}
       <div class="rail-bottom">
-        <button class="nav-item" data-open="anki">Usar a interface do Anki<span class="hint">Volte por Ferramentas, Abrir o Painel</span></button>
+        <button class="nav-item" data-act="shortcuts">Atalhos <kbd>?</kbd></button>
+        <button class="nav-item" data-open="anki">Usar a interface do Anki<span class="hint">Para voltar, use o botão Painel de Estudos no alto da tela</span></button>
       </div>
     </nav>`;
+  }
+
+  const trashBadge = () => (S.trashN ? `<span class="nav-badge" id="trash-badge">${S.trashN}</span>` : "");
+
+  function setTrashN(n) {
+    S.trashN = Number(n) || 0;
+    const item = document.querySelector('.rail [data-go="lixeira"]');
+    if (!item) return;
+    const old = item.querySelector(".nav-badge");
+    if (old) old.remove();
+    if (S.trashN) item.insertAdjacentHTML("beforeend", trashBadge());
   }
 
   function page(content) {
@@ -481,6 +593,7 @@
     roleta: viewRoleta,
     erros: viewErros,
     ajustes: viewAjustes,
+    lixeira: viewLixeira,
   };
 
   async function go(view, args = {}) {
@@ -607,14 +720,13 @@
           : `<span class="muted">Nada para revisar agora.</span>`
       }</div>
       ${d.erros7 ? `<p class="start-note muted">Caderno de erros: ${plural(d.erros7, "cartão errado", "cartões errados")} nos últimos 7 dias. <button class="link" data-go="erros">Abrir o caderno</button></p>` : ""}
-      <section class="section">
-        <div class="section-head"><h2>Matérias de hoje</h2><span class="muted">da mais fraca para a mais forte</span></div>
-        ${planHtml}
-      </section>
-      <section class="section">
-        <div class="section-head"><h2>Roleta</h2>${d.roleta.has ? `<span class="muted">${esc(d.roleta.scope)}: ${d.roleta.counts.seen} de ${d.roleta.counts.total} vistos neste ciclo</span>` : ""}</div>
-        ${roletaToday(d.roleta)}
-      </section>
+      ${foldSection("h.materias", "Matérias de hoje", `<span class="muted">da mais fraca para a mais forte</span>`, planHtml)}
+      ${foldSection(
+        "h.roleta",
+        "Roleta",
+        d.roleta.has ? `<span class="muted">${esc(d.roleta.scope)}: ${d.roleta.counts.seen} de ${d.roleta.counts.total} vistos neste ciclo</span>` : "",
+        roletaToday(d.roleta)
+      )}
     </div>`);
     animate(document.querySelector(".goal-bubbles"), "fill");
   }
@@ -1060,7 +1172,7 @@
       ? `<table class="grid"><thead><tr><th>Matéria</th><th>Hoje</th><th>Cartões</th><th>Estágio dos cartões</th><th>Acerto em 30 dias</th></tr></thead><tbody>
         ${d.rows
           .map(
-            (r) => `<tr class="clickable" data-go="materia" data-did="${r.did}">
+            (r) => `<tr class="clickable" data-go="materia" data-did="${r.did}" draggable="true" data-drag-did="${r.did}" data-drag-name="${esc(r.name)}" data-drop-did="${r.did}" data-drop-name="${esc(r.name)}">
             <td><span class="cell-name">${esc(r.name)}</span>${roletaLine(r.roleta)}</td>
             <td>${r.due ? `<strong>${r.due}</strong>` : `<span class="zero">0</span>`}</td>
             <td>${r.maturity.total}</td>
@@ -1070,15 +1182,15 @@
           .join("")}</tbody></table>${LEGEND}`
       : NO_DECKS;
     page(`<div class="page"><h1>Matérias</h1>
-      <p class="lede">Cada baralho é uma matéria. O acerto conta as respostas dos últimos 30 dias que não foram De novo.</p>
+      <p class="lede">Cada baralho é uma matéria. O acerto conta as respostas dos últimos 30 dias que não foram De novo. Arrastar uma matéria para cima de outra põe o baralho dela dentro da outra.</p>
       ${table}</div>`);
   }
 
   function roletaTopics(cat) {
     const named = cat.subs.some((s) => s.name);
     return cat.subs
-      .map(
-        (sub) => `${named ? `<div class="group-name">${esc(sub.name || "Geral")}</div>` : ""}<ul class="topics">${sub.topics
+      .map((sub) => {
+        const list = `<ul class="topics">${sub.topics
           .map(
             (t) => `<li class="topic">
               <button class="topic-toggle" data-act="ro-toggle" data-tid="${esc(t.id)}" aria-pressed="${!!t.seen}" title="${t.seen ? "Voltar ao sorteio" : "Marcar como visto"}"><span class="bubble ${t.seen ? "full" : ""}"></span></button>
@@ -1086,8 +1198,12 @@
               <span class="times">${t.seen ? esc(fmtWhen(t.seen) || "visto") : ""}</span>
             </li>`
           )
-          .join("")}</ul>`
-      )
+          .join("")}</ul>`;
+        if (!named) return list;
+        const key = "s." + sub.id;
+        const seen = sub.topics.filter((t) => t.seen).length;
+        return `<div class="fold-group ${isFolded(key) ? "folded" : ""}" data-fold="${esc(key)}"><button class="group-name fold-btn" data-act="fold" data-key="${esc(key)}" aria-expanded="${!isFolded(key)}">${CHEVRON}<span>${esc(sub.name || "Geral")}</span><span class="muted small">${seen} de ${sub.topics.length}</span></button><div class="fold-body">${list}</div></div>`;
+      })
       .join("");
   }
 
@@ -1114,17 +1230,25 @@
         <button class="btn" data-open="options" data-did="${d.did}">Opções do baralho</button>
         <button class="btn" data-open="stats" data-did="${d.did}">Estatísticas</button>
         <button class="btn" data-act="deck-rename" data-did="${d.did}" data-name="${esc(d.name)}">Renomear</button>
+        <button class="btn" data-act="deck-move" data-did="${d.did}" data-name="${esc(d.name)}">Mover</button>
       </div>
       <section class="section"><div class="section-head"><h2>Acerto</h2></div><p style="margin:12px 0 0">${esc(accText)}</p></section>
-      <section class="section"><div class="section-head"><h2>Cartões</h2><span class="muted">${plural(d.maturity.total, "cartão", "cartões")}</span></div>
-        <div style="margin-top:14px">${maturityBar(d.maturity, true)}</div>${LEGEND}</section>
+      ${foldSection(
+        "m.cartoes",
+        "Cartões",
+        `<span class="muted">${plural(d.maturity.total, "cartão", "cartões")}</span>`,
+        `<div style="margin-top:14px">${maturityBar(d.maturity, true)}</div>${LEGEND}`
+      )}
       ${subdecksSection(d)}
-      <section class="section"><div class="section-head"><h2>Temas</h2><span class="muted">do mais fraco para o mais forte, pelas etiquetas, nos últimos 90 dias</span></div>${weak}</section>
+      ${foldSection("m.temas", "Temas", `<span class="muted">do mais fraco para o mais forte, pelas etiquetas, nos últimos 90 dias</span>`, weak)}
       ${
         r
-          ? `<section class="section"><div class="section-head"><h2>Roleta</h2><span class="muted">${r.counts.seen} de ${r.counts.total} tópicos vistos neste ciclo</span></div>
-          ${roletaTopics(r.cat)}
-          <div class="actions" style="margin-top:16px"><button class="btn" data-act="ro-open" data-cat="${esc(r.cat.id)}">Abrir na Roleta</button></div></section>`
+          ? foldSection(
+              "m.roleta",
+              "Roleta",
+              `<span class="muted">${r.counts.seen} de ${r.counts.total} tópicos vistos neste ciclo</span>`,
+              `${roletaTopics(r.cat)}<div class="actions" style="margin-top:16px"><button class="btn" data-act="ro-open" data-cat="${esc(r.cat.id)}">Abrir na Roleta</button></div>`
+            )
           : ""
       }
       ${
@@ -1133,24 +1257,133 @@
           : ""
       }
     </div>`);
+    applyDeckFolds();
   }
 
   // The decks inside a matéria (the Roleta makes one per topic studied), each with its own actions.
+  // A deck with decks inside folds like in Anki; rows can be dragged onto other rows (into that
+  // deck) or onto the section's title (right under the matéria).
   function subdecksSection(d) {
     if (!d.decks.length) return "";
     const rows = d.decks
-      .map(
-        (k) => `<tr>
-        <td><span class="deck-name" style="--depth:${k.depth - 1}">${esc(k.name)}</span></td>
+      .map((k) => {
+        const tree = k.kids
+          ? `<button class="tree-btn" data-act="fold" data-key="d.${k.did}" aria-expanded="${!isFolded("d." + k.did)}" title="Mostrar ou esconder os baralhos de dentro">${CHEVRON}</button>`
+          : `<span class="tree-pad"></span>`;
+        return `<tr class="deck-row" draggable="true" data-drag-did="${k.did}" data-drag-name="${esc(k.name)}" data-drop-did="${k.did}" data-drop-name="${esc(k.name)}" data-depth="${k.depth}" data-kids="${k.kids}">
+        <td><span class="deck-name" style="--depth:${k.depth - 1}">${tree}<span>${esc(k.name)}</span></span></td>
         <td>${k.due ? `<strong>${k.due}</strong>` : `<span class="zero">0</span>`}</td>
         <td>${k.cards}</td>
-        <td class="row-acts">${k.due ? `<button class="btn" data-act="study" data-did="${k.did}">Estudar</button>` : ""}<button class="btn quiet" data-open="browse" data-did="${k.did}">Procurar</button><button class="icon-btn" data-act="deck-rename" data-did="${k.did}" data-name="${esc(k.name)}" title="Renomear" aria-label="Renomear ${esc(k.name)}">${ICON.edit}</button><button class="icon-btn del" data-act="deck-delete" data-did="${k.did}" data-name="${esc(k.name)}" data-cards="${k.cards}" data-kids="${k.kids}" title="Excluir" aria-label="Excluir ${esc(k.name)}">${ICON.trash}</button></td>
-      </tr>`
+        <td class="row-acts">${k.due ? `<button class="btn" data-act="study" data-did="${k.did}">Estudar</button>` : ""}<button class="btn quiet" data-open="browse" data-did="${k.did}">Procurar</button><button class="icon-btn" data-act="deck-rename" data-did="${k.did}" data-name="${esc(k.name)}" title="Renomear" aria-label="Renomear ${esc(k.name)}">${ICON.edit}</button><button class="icon-btn" data-act="deck-move" data-did="${k.did}" data-name="${esc(k.name)}" title="Mover para…" aria-label="Mover ${esc(k.name)}">${ICON.move}</button><button class="icon-btn del" data-act="deck-delete" data-did="${k.did}" data-name="${esc(k.name)}" data-cards="${k.cards}" data-kids="${k.kids}" title="Excluir" aria-label="Excluir ${esc(k.name)}">${ICON.trash}</button></td>
+      </tr>`;
+      })
+      .join("");
+    const key = "m.baralhos";
+    return `<section class="section foldable ${isFolded(key) ? "folded" : ""}" data-fold="${key}">
+      <div class="section-head drop-head" data-drop-did="${d.did}" data-drop-name="${esc(d.name)}"><h2><button class="fold-btn" data-act="fold" data-key="${key}" aria-expanded="${!isFolded(key)}">${CHEVRON}<span>Baralhos dentro de ${esc(d.name)}</span></button></h2><span class="muted">${plural(d.decks.length, "baralho", "baralhos")}</span></div>
+      <div class="fold-body"><p class="muted small drag-hint">Arraste um baralho para cima de outro para pô-lo dentro dele, ou para este título para trazê-lo para logo abaixo de ${esc(d.name)}.</p>
+      <table class="grid decks-grid"><thead><tr><th>Baralho</th><th>Hoje</th><th>Cartões</th><th><span class="sr-only">Ações</span></th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
+  }
+
+  // Hides the rows inside folded decks.
+  function applyDeckFolds() {
+    document.querySelectorAll(".decks-grid").forEach((table) => {
+      let hideBelow = Infinity;
+      table.querySelectorAll("tr.deck-row").forEach((tr) => {
+        const depth = Number(tr.dataset.depth);
+        if (depth > hideBelow) {
+          tr.hidden = true;
+          return;
+        }
+        hideBelow = Infinity;
+        tr.hidden = false;
+        if (Number(tr.dataset.kids) && isFolded("d." + tr.dataset.dropDid)) hideBelow = depth;
+      });
+    });
+  }
+
+  // ---------------------------------------------------------------- moving decks
+  async function moveDeck(did, name, parent) {
+    let res;
+    try {
+      res = await api("deck_move", { did, parent });
+    } catch (err) {
+      return;
+    }
+    if (!res.changed) return toast(`${name} já está aí.`);
+    await rerender();
+    const where = res.to ? `para dentro de ${res.to}` : "para o nível de cima";
+    toast(`Movido: ${res.name} ${where}.`, { action: { label: "Desfazer", fn: undoDeckChange } });
+  }
+
+  async function openMoveDialog(did) {
+    let d;
+    try {
+      d = await api("deck_targets", { did });
+    } catch (err) {
+      return;
+    }
+    const options = [`<option value="${d.level}" ${d.parent === d.level ? "selected" : ""}>Como matéria</option>`]
+      .concat(
+        d.decks
+          .filter((x) => x.did !== d.level)
+          .map((x) => `<option value="${x.did}" ${x.did === d.parent ? "selected" : ""}>${esc(x.name)}</option>`)
       )
       .join("");
-    return `<section class="section"><div class="section-head"><h2>Baralhos dentro de ${esc(d.name)}</h2><span class="muted">${plural(d.decks.length, "baralho", "baralhos")}</span></div>
-      <table class="grid decks-grid"><thead><tr><th>Baralho</th><th>Hoje</th><th>Cartões</th><th><span class="sr-only">Ações</span></th></tr></thead><tbody>${rows}</tbody></table></section>`;
+    const el = overlay(`<div class="dialog small-dialog" role="dialog" aria-modal="true" aria-labelledby="mv-title">
+      <h3 id="mv-title">Mover ${esc(d.name)}</h3>
+      <label class="field"><span>Para dentro de</span><select class="select" id="mv-target">${options}</select></label>
+      <p class="muted small">Os baralhos de dentro dele vão junto. Os cartões e os intervalos não mudam.</p>
+      <div class="actions end top-gap"><button class="btn" data-act="dlg-close">Cancelar</button><button class="btn primary" data-act="mv-ok">Mover</button></div></div>`);
+    el._did = d.did;
+    el._name = d.name;
   }
+
+  function dragEl(ev) {
+    const t = ev.target;
+    return t && t.nodeType === 1 ? t : t && t.parentElement;
+  }
+
+  function endDrag() {
+    S.drag = null;
+    document.body.classList.remove("deck-dragging");
+    document.querySelectorAll(".dragging, .drop-over").forEach((el) => el.classList.remove("dragging", "drop-over"));
+  }
+
+  document.addEventListener("dragstart", (ev) => {
+    const el = dragEl(ev);
+    const row = el && el.closest("[data-drag-did]");
+    if (!row) return;
+    S.drag = { did: Number(row.dataset.dragDid), name: row.dataset.dragName };
+    row.classList.add("dragging");
+    document.body.classList.add("deck-dragging");
+    if (ev.dataTransfer) {
+      ev.dataTransfer.effectAllowed = "move";
+      ev.dataTransfer.setData("text/plain", row.dataset.dragName || "");
+    }
+  });
+  document.addEventListener("dragover", (ev) => {
+    if (!S.drag) return;
+    const el = dragEl(ev);
+    const target = el && el.closest("[data-drop-did]");
+    document.querySelectorAll(".drop-over").forEach((x) => x !== target && x.classList.remove("drop-over"));
+    if (!target || Number(target.dataset.dropDid) === S.drag.did) return;
+    ev.preventDefault();
+    if (ev.dataTransfer) ev.dataTransfer.dropEffect = "move";
+    target.classList.add("drop-over");
+  });
+  document.addEventListener("drop", (ev) => {
+    if (!S.drag) return;
+    const el = dragEl(ev);
+    const target = el && el.closest("[data-drop-did]");
+    const drag = S.drag;
+    endDrag();
+    if (!target) return;
+    ev.preventDefault();
+    const parent = Number(target.dataset.dropDid);
+    if (parent !== drag.did) moveDeck(drag.did, drag.name, parent);
+  });
+  document.addEventListener("dragend", endDrag);
 
   function renameDeck(did, name) {
     askName({
@@ -1159,7 +1392,7 @@
       ok: "Renomear",
       submit: async (value) => {
         const res = await api("deck_rename", { did, name: value });
-        toast(`Nome salvo: ${res.name}.`);
+        if (res.changed) toast(`Nome salvo: ${res.name}.`, { action: { label: "Desfazer", fn: undoDeckChange } });
         rerender();
       },
     });
@@ -1177,7 +1410,7 @@
     if (kids && cards) what = `O baralho ${name} é excluído com ${kidsText} e ${cardsText}, como no Anki.`;
     else if (cards) what = `O baralho ${name} é excluído com ${cardsText}, como no Anki.`;
     else if (kids) what = `O baralho ${name} é excluído com ${kidsText}, que não têm cartões.`;
-    const ok = await ask({ title: `Excluir ${name}?`, msg: `${what} Dá para desfazer logo em seguida.`, ok: "Excluir", danger: true });
+    const ok = await ask({ title: `Excluir ${name}?`, msg: `${what} Uma cópia com os cartões, os intervalos e o histórico fica na Lixeira por 30 dias.`, ok: "Excluir", danger: true });
     if (!ok) return;
     let res;
     try {
@@ -1185,19 +1418,76 @@
     } catch (err) {
       return;
     }
+    setTrashN(res.trash_n);
     await (matter ? go("materias") : rerender());
     const lost = res.cards ? `, com ${plural(res.cards, "cartão", "cartões")}` : "";
-    toast(`Baralho excluído: ${res.name}${lost}.`, { action: { label: "Desfazer", fn: undoDeckDelete } });
+    toast(`Baralho excluído: ${res.name}${lost}. Está na Lixeira.`, { action: { label: "Desfazer", fn: undoDeckChange } });
   }
 
-  async function undoDeckDelete() {
+  // Desfazer for the last deck deleted, renamed or moved (Anki's own undo, right after)
+  async function undoDeckChange() {
+    let res;
     try {
-      await api("deck_undo");
+      res = await api("deck_undo");
     } catch (err) {
       return;
     }
-    toast("Exclusão desfeita.");
+    if (res.trash_n != null) setTrashN(res.trash_n);
+    toast("Desfeito.");
     rerender();
+  }
+
+  // ---------------------------------------------------------------- lixeira
+  const TRASH_KIND = { deck: "Baralho", topic: "Tópico", sub: "Subcategoria", cat: "Matéria", roleta: "Roleta" };
+  const whenText = (ts) => {
+    const w = fmtWhen(ts);
+    return /^\d/.test(w) ? "em " + w : w;
+  };
+
+  function trashMeta(t) {
+    const when = whenText(t.when);
+    if (t.kind === "deck") return [t.where ? `em ${t.where}` : "", plural(t.cards || 0, "cartão", "cartões"), `excluído ${when}`];
+    if (t.kind === "topic") return [`da Roleta, em ${t.where}`, `removido ${when}`];
+    if (t.kind === "sub") return [`de ${t.where}, na Roleta`, plural(t.n || 0, "tópico", "tópicos"), `removida ${when}`];
+    if (t.kind === "cat") return ["da Roleta", plural(t.n || 0, "tópico", "tópicos"), `removida ${when}`];
+    return [`${plural(t.cats_n || 0, "matéria", "matérias")}, ${plural(t.n || 0, "tópico", "tópicos")}`, when];
+  }
+
+  async function viewLixeira() {
+    const d = await api("trash");
+    setTrashN(d.trash_n);
+    const rows = d.items
+      .map(
+        (t) => `<li class="trash-item">
+        <span class="trash-kind">${TRASH_KIND[t.kind] || ""}</span>
+        <div class="trash-body"><span class="trash-label">${esc(t.label)}</span><span class="trash-meta">${esc(trashMeta(t).filter(Boolean).join(" · "))}</span></div>
+        <div class="trash-acts"><button class="btn" data-act="trash-restore" data-id="${esc(t.id)}">Restaurar</button><button class="btn quiet" data-act="trash-delete" data-id="${esc(t.id)}">Apagar de vez</button></div>
+      </li>`
+      )
+      .join("");
+    page(`<div class="page">
+      <h1>Lixeira</h1>
+      <p class="lede">O que você exclui pelo painel fica aqui por ${d.days} dias: baralhos, com os cartões, os intervalos e o histórico, e tópicos, subcategorias e matérias da Roleta. Restaurar põe de volta onde estava.</p>
+      ${
+        d.items.length
+          ? `<ul class="trash-list">${rows}</ul><div class="page-foot"><button class="link danger" data-act="trash-empty">Esvaziar a lixeira</button></div>`
+          : `<div class="empty"><p>A lixeira está vazia.</p></div>`
+      }
+      <p class="muted small trash-note">Os baralhos ficam guardados neste computador; os itens da Roleta vão junto com a coleção na sincronização.</p>
+    </div>`);
+  }
+
+  async function trashAct(method, id) {
+    let res;
+    try {
+      res = await api(method, id ? { id } : {});
+    } catch (err) {
+      return;
+    }
+    setTrashN(res.trash_n);
+    S.roCounts = null;
+    if (res.toast) toast(res.toast, res.can_undo ? { action: { label: "Desfazer", fn: roUndo } } : {});
+    if (S.view === "lixeira") rerender();
   }
 
   // ---------------------------------------------------------------- caderno de erros
@@ -1251,8 +1541,8 @@
       rows += errItem(it);
     }
     const redo = g.did && g.available ? `<button class="btn small" data-act="err-redo" data-days="${days}" data-did="${g.did}">Refazer</button>` : "";
-    return `<section class="section err-group"><div class="section-head"><h2>${esc(g.name)}</h2><div class="head-actions"><span class="muted">${plural(g.items.length, "cartão", "cartões")}</span>${redo}</div></div>
-      <ul class="err-list">${rows}</ul></section>`;
+    const meta = `<div class="head-actions"><span class="muted">${plural(g.items.length, "cartão", "cartões")}</span>${redo}</div>`;
+    return foldSection(`e.${g.did || g.name}`, esc(g.name), meta, `<ul class="err-list">${rows}</ul>`, "err-group");
   }
 
   function errItem(it) {
@@ -1345,15 +1635,18 @@
     const res = await api(method, args, opts);
     if (COUNT_CHANGES.test(method)) S.roCounts = null;
     if (res && res.state) S.ro = res;
+    if (res && res.trash_n != null) setTrashN(res.trash_n);
     if (opts.refresh !== false && S.view === "roleta") refreshRoleta();
     if (res && res.toast) toast(res.toast, opts.undo ? { action: { label: "Desfazer", fn: roUndo } } : {});
     return res;
   }
 
   const roUndo = () =>
-    roCall("roleta_undo").then(() => {
+    roCall("roleta_undo").then((res) => {
       if (S.view === "roleta") renderRoleta();
       else rerender();
+      if (res && res.can_undo) S.lastUndo = roUndo; // the next Ctrl+Z takes back the change before
+      if (res && res.trash_n != null) setTrashN(res.trash_n);
     });
 
   // ---------------------------------------------------------------- roleta: wheel
@@ -1856,19 +2149,28 @@
       .join("");
     const counts = S.roCounts && S.roCounts.cat === cat.id ? S.roCounts.counts : null;
     if (!counts && cat.deck) loadCardCounts(cat.id);
-    const rows = shown
-      .map(
-        ({ t, s }) => `<div class="ro-row">
+    const grouped = sc.all && cat.subs.length > 1;
+    const row = (t, s) => `<div class="ro-row">
           <button class="topic-toggle" data-act="ro-toggle" data-tid="${esc(t.id)}" aria-pressed="${!!t.seen}" title="${t.seen ? "Voltar ao sorteio" : "Marcar como visto"}"><span class="bubble ${t.seen ? "full" : ""}"></span></button>
           <div class="ro-namebox"><input class="ro-name" data-rename="${esc(t.id)}" value="${esc(t.t)}" aria-label="Nome do tópico" title="${esc(t.t)}" spellcheck="false">${
-            sc.all ? `<span class="ro-sub">${esc(subLabel(s))}</span>` : ""
+            sc.all && !grouped ? `<span class="ro-sub">${esc(subLabel(s))}</span>` : ""
           }</div>
           ${cardsPill(counts, t)}
           <button class="icon-btn ${t.note ? "has" : ""}" data-act="ro-detail" data-tid="${esc(t.id)}" title="${t.note ? "Ver anotação" : "Anotar"}">${ICON.note}</button>
           <button class="icon-btn del" data-act="ro-remove" data-tid="${esc(t.id)}" title="Remover tópico">${ICON.trash}</button>
-        </div>`
-      )
-      .join("");
+        </div>`;
+    let rows = "";
+    let group = null;
+    for (const { t, s } of shown) {
+      const key = "s." + s.id;
+      const closed = grouped && !q && isFolded(key);
+      if (grouped && s !== group) {
+        group = s;
+        const n = shown.filter((it) => it.s === s).length;
+        rows += `<button class="ro-group" data-act="fold" data-key="${esc(key)}" aria-expanded="${!closed}">${CHEVRON}<span>${esc(subLabel(s))}</span><span class="badge">${n}</span></button>`;
+      }
+      if (!closed) rows += row(t, s);
+    }
     const addSub =
       sc.all && cat.subs.length > 1
         ? `<select class="select" id="ro-add-sub" aria-label="Subcategoria do novo tópico">${cat.subs.map((s) => `<option value="${esc(s.id)}">${esc(subLabel(s))}</option>`).join("")}</select>`
@@ -1920,6 +2222,7 @@
       if (S.view === "roleta") refreshRoleta();
     };
     el._tid = f.topic.id;
+    el._result = result;
     loadTopicCards(el);
   }
 
@@ -1978,6 +2281,8 @@
       links = [pick];
     }
     if (own && info.mode !== "deck") text += `<p class="muted small">Baralho do tópico: ${esc(own.path)}, ${own.n ? cards(own.n) : "ainda sem cartões"}.</p>`;
+    // in the result Estudar makes it; opened from the list, this link does
+    if (!own && !el._result) links.push(link("tc-make-deck", "Criar o baralho do tópico"));
     let html = text + (links.length && !opts.picker ? `<div class="tc-links">${links.join("")}</div>` : "");
     if (opts.picker && info.tags) {
       const current = info.mode === "tag" ? info.tag : info.suggest ? info.suggest.tag : "";
@@ -2199,7 +2504,7 @@ Regência verbal`;
       <section class="section"><div class="section-head"><h2>Anki</h2></div>
         <div class="actions" style="margin-top:14px"><button class="btn" data-open="prefs">Preferências do Anki</button><button class="btn" data-open="profiles">Trocar de perfil</button></div></section>
       <section class="section"><div class="section-head"><h2>Interface</h2></div>
-        <p class="note">A interface normal do Anki continua disponível. Para voltar ao painel, use Ferramentas, Abrir o Painel de Estudos.</p>
+        <p class="note">A interface normal do Anki continua disponível. Para voltar ao painel, use o botão Painel de Estudos, no alto da tela, ou Ferramentas, Abrir o Painel de Estudos. O botão Painel do próprio Anki é a janela Procurar.</p>
         <div class="actions" style="margin-top:12px"><button class="btn" data-open="anki">Usar a interface do Anki</button></div></section>
       <p class="note" style="margin-top:48px">Painel de Estudos ${esc(d.version)}, perfil ${esc(d.profile)}.</p>
     </div>`);
@@ -2292,6 +2597,8 @@ Regência verbal`;
         .catch(() => {}),
     "fx-test": () => play("reveal"),
     "dlg-close": (t) => closeOverlay(topOverlay(t)),
+    fold: (t) => toggleFold(t),
+    shortcuts: () => openShortcuts(),
     "ask-ok": (t) => {
       const el = topOverlay(t);
       const resolve = el._resolve;
@@ -2332,6 +2639,35 @@ Regência verbal`;
     },
     "deck-rename": (t) => renameDeck(Number(t.dataset.did), t.dataset.name),
     "deck-delete": (t) => deleteDeck(t),
+    "deck-move": (t) => openMoveDialog(Number(t.dataset.did)),
+    "mv-ok": (t) => {
+      const el = topOverlay(t);
+      const select = el.querySelector("#mv-target");
+      const did = el._did;
+      const name = el._name;
+      closeOverlay(el);
+      if (select) moveDeck(did, name, Number(select.value));
+    },
+    "trash-restore": (t) => trashAct("trash_restore", t.dataset.id),
+    "trash-delete": async (t) => {
+      const id = t.dataset.id;
+      const ok = await ask({ title: "Apagar de vez?", msg: "Esse item sai da Lixeira e não dá mais para restaurar.", ok: "Apagar de vez", danger: true });
+      if (ok) trashAct("trash_delete", id);
+    },
+    "trash-empty": async () => {
+      const ok = await ask({ title: "Esvaziar a lixeira?", msg: "Tudo o que está na Lixeira é apagado de vez.", ok: "Esvaziar", danger: true });
+      if (ok) trashAct("trash_empty");
+    },
+    "tc-make-deck": (t) => {
+      const el = topOverlay(t);
+      roCall("roleta_topic_deck", { tid: el._tid }, { refresh: false })
+        .then((res) => {
+          const d = res.topic_deck;
+          toast(`${d.created ? "Baralho criado" : "Baralho do tópico"}: ${d.path}`, { action: { label: "Adicionar cartões", fn: () => openAnki("add", d.did) } });
+          if (el.isConnected) loadTopicCards(el);
+        })
+        .catch(() => {});
+    },
     "ask-name-ok": (t) => {
       const el = topOverlay(t);
       if (el && el._submit) el._submit();
@@ -2521,6 +2857,14 @@ Regência verbal`;
     const tag = (target.tagName || "").toLowerCase();
     const typing = ["input", "textarea", "select"].includes(tag);
     const k = (ev.key || "").toLowerCase();
+    if (!typing && !overlays.length && (ev.ctrlKey || ev.metaKey) && k === "z" && S.view !== "study") {
+      ev.preventDefault();
+      return runLastUndo();
+    }
+    if (!typing && ev.key === "?" && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+      ev.preventDefault();
+      return openShortcuts();
+    }
     if (overlays.length) {
       if (k === "escape") {
         ev.preventDefault();
@@ -2637,6 +2981,8 @@ Regência verbal`;
       S.base = b.base;
       S.fx = b.fx || S.fx;
       S.reduceMotion = !!b.reduce_motion;
+      S.folds = (b.ui && b.ui.folds) || {};
+      S.trashN = b.trash_n || 0;
       document.documentElement.classList.toggle("night-mode", !!b.night);
     } catch (err) {
       /* shown already */
