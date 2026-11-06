@@ -34,7 +34,7 @@ from . import mobile
 from . import roleta as ro
 from . import stats, store, topics
 
-VERSION = "0.6.0"
+VERSION = "0.7.0"
 RATINGS = {1: CardAnswer.AGAIN, 2: CardAnswer.HARD, 3: CardAnswer.GOOD, 4: CardAnswer.EASY}
 # Topic and error sessions run in a filtered deck of their own, emptied and removed at the end.
 TEMP_DECK = "Painel de Estudos (sessão)"
@@ -1361,12 +1361,12 @@ class Api:
 
     # ------------------------------------------------------------------ celular (AnkiDroid)
     def mobile_status(self) -> dict:
-        """The note types with Certo/Errado items or questions, and whether the phone block is in them."""
-        counts = dict(self.col.db.all(mobile.NOTES_SQL))
+        """The note types in use, and whether the phone block is in them."""
+        counts = dict(self.col.db.all(mobile.COUNT_SQL))
         types = []
         for nt in self.col.models.all():
             state = mobile.state_of(nt["tmpls"])
-            notes = counts.get(nt["id"], 0)
+            notes = counts.get(nt["id"], 0) if mobile.eligible(nt["tmpls"]) else 0
             if notes or state != "off":
                 types.append({"id": nt["id"], "name": nt["name"], "notes": notes, "state": state})
         types.sort(key=lambda t: -t["notes"])
@@ -1385,7 +1385,7 @@ class Api:
             self.col.models.update_dict(nt)
             changed += 1
         if not changed:
-            raise UserError("Nenhum modelo de cartão com itens Certo/Errado ou questões foi encontrado.")
+            raise UserError("Nenhum modelo de cartão com notas foi encontrado.")
         return self.mobile_status()
 
     def mobile_disable(self) -> dict:

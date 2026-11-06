@@ -2516,36 +2516,39 @@ Regência verbal`;
     const used = types.filter((t) => t.notes);
     const on = types.filter((t) => t.state === "on");
     const old = types.filter((t) => t.state === "old");
+    const missing = used.filter((t) => t.state === "off");
     const names = (list) => list.map((t) => `${esc(t.name)}${t.notes ? ` (${plural(t.notes, "nota", "notas")})` : ""}`).join(", ");
     let status;
     let buttons;
     if (!used.length && !on.length && !old.length) {
-      status = "Nenhum modelo de cartão com itens Certo/Errado ou questões apareceu na coleção.";
+      status = "Nenhum modelo de cartão com notas apareceu na coleção.";
       buttons = "";
     } else if (old.length) {
-      status = `Ligado em ${names(old)}, numa versão anterior do painel.`;
-      buttons = `<button class="btn primary" data-act="mobile-on">Atualizar</button><button class="btn" data-act="mobile-off">Desativar</button>`;
+      status = `Ligado em ${names(old)}, numa versão anterior do painel.${missing.length ? ` Atualizar também põe em ${names(missing)}.` : ""}`;
+      buttons = `<button class="btn primary" data-act="mobile-on" data-mode="update">Atualizar</button><button class="btn" data-act="mobile-off">Desativar</button>`;
     } else if (on.length) {
-      status = `Ligado em ${names(on)}. Chega ao celular na próxima sincronização.`;
-      buttons = `<button class="btn" data-act="mobile-off">Desativar</button>`;
+      status = `Ligado em ${names(on)}. Chega ao celular na próxima sincronização.${missing.length ? ` Ainda não está em ${names(missing)}.` : ""}`;
+      buttons = `${missing.length ? `<button class="btn primary" data-act="mobile-on">Pôr nos outros modelos</button>` : ""}<button class="btn" data-act="mobile-off">Desativar</button>`;
     } else {
-      status = `Desligado. Vai no modelo ${names(used)}.`;
+      status = `Desligado. Vai ${used.length > 1 ? "nos modelos" : "no modelo"} ${names(used)}.`;
       buttons = `<button class="btn primary" data-act="mobile-on">Ativar no celular</button>`;
     }
     return `<section class="section"><div class="section-head"><h2>Celular (AnkiDroid)</h2><span class="muted">vale depois de sincronizar</span></div>
-      <p class="note">Põe os botões C e E, e as letras das questões, dentro dos próprios cartões, para responder no AnkiDroid como aqui: errou, Continuar, que dá De novo; acertou, Difícil, Bom ou Fácil. No Anki do computador os cartões continuam iguais.</p>
+      <p class="note">Põe dentro dos próprios cartões os botões C e E, as letras das questões e o Modo voz, para estudar no AnkiDroid como aqui: errou, Continuar, que dá De novo; acertou, Difícil, Bom ou Fácil. No Modo voz, o AnkiDroid lê o cartão em voz alta e você responde falando. No Anki do computador os cartões continuam iguais.</p>
       <p class="mobile-status">${status}</p>
       ${buttons ? `<div class="actions" style="margin-top:12px">${buttons}</div>` : ""}
-      <p class="note">Feito para a tela de estudo padrão do AnkiDroid. Na tela de estudo nova, que ainda é experimental, o cartão mostra se você acertou, e a nota fica nos botões do próprio AnkiDroid.</p>
+      <p class="note">Feito para a tela de estudo padrão do AnkiDroid. Na tela de estudo nova, que ainda é experimental, o cartão mostra se você acertou, a nota fica nos botões do próprio AnkiDroid e o Modo voz não aparece.</p>
+      <p class="note">Para o Modo voz, o AnkiDroid precisa de permissão para o microfone (nas configurações do Android, em Apps, AnkiDroid, Permissões). Para estudar sem tocar na tela, ligue também a opção do AnkiDroid que mantém a tela ligada durante o estudo.</p>
     </section>`;
   }
 
-  const mobileOn = () =>
+  const mobileOn = (mode) =>
     guarded(async () => {
+      const update = mode === "update";
       const ok = await ask({
-        title: "Ativar no celular?",
-        msg: "O painel acrescenta um bloco de código no fim da frente e do verso do modelo de cartão desses itens. O resto do modelo não muda, e Desativar tira o bloco.",
-        ok: "Ativar",
+        title: update ? "Atualizar o bloco do celular?" : "Ativar no celular?",
+        msg: "O painel acrescenta um bloco de código no fim da frente e do verso dos modelos de cartão que têm notas (todos, menos o de oclusão de imagem). O resto do modelo não muda, e Desativar tira o bloco.",
+        ok: update ? "Atualizar" : "Ativar",
       });
       if (!ok) return;
       await api("mobile_enable");
@@ -2584,7 +2587,7 @@ Regência verbal`;
     undo: () => cardAction("undo"),
     replay: () => api("replay").catch(() => {}),
     reason: (t) => setReason(t.dataset.code),
-    "mobile-on": () => mobileOn(),
+    "mobile-on": (t) => mobileOn(t.dataset.mode),
     "mobile-off": () => mobileOff(),
     "edit-card": (t) => api("edit", { cid: Number(t.dataset.cid) }).catch(() => {}),
     "err-days": (t) => go("erros", { days: Number(t.dataset.days) }),

@@ -144,6 +144,22 @@ def phone_state(label):
     log(f"{label}: {[(t['name'], t['notes'], t['state']) for t in status['types']]} template sizes {sizes}")
 
 
+def old_phone_block():
+    """As after 0.6 (block v1 in Básico), with a cloze note type used since: Atualizar covers both."""
+    from painel_estudos import mobile
+
+    col = mw.col
+    cloze = next(m for m in col.models.all() if m["type"] == 1 and mobile.eligible(m["tmpls"]))
+    note = col.new_note(cloze)
+    note.fields[0] = "Comete furto quem {{c1::subtrai}} coisa alheia móvel, para si ou para outrem."
+    col.add_note(note, col.decks.id("Direito Penal"))
+    nt = col.models.by_name("Básico")
+    for t in nt["tmpls"]:
+        for side in ("qfmt", "afmt"):
+            t[side] = t[side].replace(f"painel-estudos:celular v{mobile.VERSION}", "painel-estudos:celular v1")
+    col.models.update_dict(nt)
+
+
 def pick_cat(cat_id):
     js(f"(function(){{var s=document.querySelector('[data-ro-cat]'); s.value={json.dumps(cat_id)}; s.dispatchEvent(new Event('change',{{bubbles:true}}));}})()")
 
@@ -482,6 +498,19 @@ STEPS = [
     (lambda: mw.toolbar.web.eval("var a=document.getElementById('painel-estudos'); if (a) a.click();"), 1800),
     (lambda: widgets_state("after the top bar button"), 300),
     (lambda: shot("60_painel_de_volta"), 300),
+    # 0.7: the phone block from 0.6 is offered as Atualizar, which also covers the cloze note type
+    (lambda: mw.painel_estudos.api.mobile_enable(), 300),
+    (old_phone_block, 300),
+    (lambda: phone_state("phone block as in 0.6"), 300),
+    (lambda: click('[data-go="ajustes"]'), 1600),
+    (lambda: js("document.querySelector('.mobile-status').scrollIntoView({block: 'center'})"), 500),
+    (lambda: shot("61_celular_atualizar"), 300),
+    (lambda: click('[data-act="mobile-on"]'), 900),
+    (lambda: shot("61b_celular_atualizar_pergunta"), 300),
+    (lambda: click('[data-act="ask-ok"]'), 1600),
+    (lambda: phone_state("phone block updated"), 300),
+    (lambda: js("document.querySelector('.mobile-status').scrollIntoView({block: 'center'})"), 500),
+    (lambda: shot("61c_celular_atualizado"), 300),
     (ui_file, 300),
     (lambda: mw.close(), 0),
 ]

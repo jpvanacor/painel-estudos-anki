@@ -27,10 +27,17 @@ Extensão do Anki que troca a janela principal por uma interface de estudo para 
   - Backup: salve em arquivo ou copie. O arquivo também abre na Roleta de Estudos.
   - Atalho: Espaço gira.
 - **Caderno de erros**: os cartões errados hoje, nos últimos 7 ou 30 dias, por matéria e por lei, com o gabarito, a correção e o verso. Refazer monta uma sessão só com eles (de todas as matérias ou de uma). Se você marcou os motivos dos erros, o caderno mostra qual aparece mais.
-- **Celular (AnkiDroid)**: em Ajustes, Ativar no celular põe os botões C e E, e as letras das questões, dentro dos próprios cartões.
+- **Celular (AnkiDroid)**: em Ajustes, Ativar no celular põe os botões C e E, as letras das questões e o Modo voz dentro dos próprios cartões.
   - No AnkiDroid, tocar numa opção vira o cartão. O verso mostra se você acertou, risca a troca dos itens ERRADO e traz as notas do mesmo jeito do painel: errou, Continuar, que dá De novo; acertou, Difícil, Bom ou Fácil.
-  - Feito para a tela de estudo padrão do AnkiDroid. Na tela de estudo nova, que ainda é experimental, o verso mostra o resultado e a nota fica nos botões do próprio AnkiDroid.
-  - O código vai num bloco no fim da frente e do verso do modelo de cartão desses itens (em geral, o Básico). O resto do modelo não muda, Desativar tira o bloco, e a mudança vai para o celular numa sincronização normal, sem sincronização completa. No Anki do computador os cartões ficam iguais.
+  - **Modo voz**: o botão 🎤 Modo voz, no alto do cartão, faz o AnkiDroid ler o cartão em voz alta e ouvir a resposta, cartão após cartão, sem tocar na tela. Fica ligado durante a sessão de estudo, até você dizer "parar" ou tocar em Parar.
+    - Na frente: "certo" ou "errado"; "letra A" (ou "alternativa B", "a segunda"); nos outros cartões, "mostrar". Nos cartões de omissão de palavras, a lacuna é lida como "lacuna".
+    - No verso, ele diz se você acertou, o gabarito e, nos itens ERRADO, o que a lei diz. Errou: "continuar", que dá De novo. Acertou: "difícil", "bom" ou "fácil". Nos outros cartões: "errei", "difícil", "bom" ou "fácil".
+    - A qualquer hora: "repete", "mais rápido", "mais devagar" e "parar". No verso, "explica" lê a explicação.
+    - Nos três primeiros cartões ele também diz as palavras que valem; depois, só lê. Três respostas que ele não entende, ou cerca de um minuto de silêncio, pausam o Modo voz, e Continuar, no alto do cartão, volta a ouvir.
+    - Usa a voz e o reconhecimento de fala do próprio Android, pela API JavaScript do AnkiDroid. O AnkiDroid precisa da permissão do microfone, o Android precisa de uma voz em português para ler, e o reconhecimento de fala pode precisar de internet se o português não estiver baixado para uso offline. Para a tela não apagar no meio, ligue a opção do AnkiDroid que mantém a tela ligada.
+  - Feito para a tela de estudo padrão do AnkiDroid. Na tela de estudo nova, que ainda é experimental, o verso mostra o resultado, a nota fica nos botões do próprio AnkiDroid e o Modo voz não aparece.
+  - O código vai num bloco no fim da frente e do verso dos modelos de cartão que têm notas (todos, menos o de oclusão de imagem). O resto do modelo não muda, Desativar tira o bloco, e a mudança vai para o celular numa sincronização normal, sem sincronização completa. No Anki do computador os cartões ficam iguais.
+  - Quem ativou numa versão anterior vê Atualizar em Ajustes: ele troca o bloco pela versão nova e põe o bloco nos outros modelos com notas.
 - **Lixeira**: o que você exclui pelo painel fica 30 dias na Lixeira, e Restaurar põe de volta onde estava.
   - Baralhos: antes de excluir, o painel guarda uma cópia com os cartões, os intervalos e o histórico (na pasta `user_files` da extensão, neste computador). Restaurar importa a cópia, refaz os baralhos vazios que estavam dentro e liga de novo a Roleta aos baralhos.
   - Roleta: tópicos removidos, subcategorias apagadas em Organizar, matérias excluídas e a Roleta inteira, quando um backup importado ou Apagar tudo a substituem. Esses ficam na coleção e vão junto na sincronização.
@@ -45,15 +52,15 @@ Quem usava o Edital da versão 0.1 não perde nada: ao abrir a 0.2 ou mais nova,
 
 ## Instalar
 
-1. Na pasta [`versoes`](versoes), abra o arquivo da versão mais nova (hoje, `painel_estudos-0.6.0.ankiaddon`) e baixe pelo botão de download do GitHub.
+1. Na pasta [`versoes`](versoes), abra o arquivo da versão mais nova (hoje, `painel_estudos-0.7.0.ankiaddon`) e baixe pelo botão de download do GitHub.
 2. No Anki: Ferramentas, Extensões, Instalar de um arquivo. Escolha o arquivo e reinicie o Anki.
 
-Para atualizar, instale o arquivo novo do mesmo jeito. Se algo der errado, segure Shift enquanto abre o Anki: ele abre sem extensões.
+Para atualizar, instale o arquivo novo do mesmo jeito. Se o celular estiver ativado e a versão nova trouxer um bloco novo, Ajustes mostra Atualizar; depois, sincronize o computador e então o celular. Se algo der errado, segure Shift enquanto abre o Anki: ele abre sem extensões.
 
 ## Requisitos e limites
 
 - Testado no Anki 26.09.3 (Python 3.13). O código roda em Python 3.9 ou mais novo, mas versões antigas do Anki não foram testadas.
-- O painel é do computador: AnkiDroid e AnkiMobile não rodam extensões. No celular entram só os botões dentro dos cartões, e só no AnkiDroid: o código não age em outros aplicativos. A Roleta e o caderno de erros ficam salvos na coleção e vão junto na sincronização, mas só aparecem no computador.
+- O painel é do computador: AnkiDroid e AnkiMobile não rodam extensões. No celular entram só os botões e o Modo voz dentro dos cartões, e só no AnkiDroid: o código não age em outros aplicativos. A Roleta e o caderno de erros ficam salvos na coleção e vão junto na sincronização, mas só aparecem no computador.
 - O conteúdo dos cartões aparece num quadro isolado: scripts do modelo de cartão não rodam, e cartões de digitar a resposta ou de oclusão de imagem devem ser estudados na interface normal do Anki.
 - A Lixeira dos baralhos fica no computador onde o baralho foi excluído; em outro computador, ela não aparece.
 - Baralhos filtrados não aparecem como matérias. Com um baralho de cima guardando as matérias, só os baralhos logo abaixo dele contam como matérias; os de mais baixo (como os dos tópicos) ficam dentro da matéria.
@@ -63,7 +70,7 @@ Para atualizar, instale o arquivo novo do mesmo jeito. Se algo der errado, segur
 - `python3 -m pytest tests`: formatos de cartão, regras da Roleta e a ligação entre tópicos e cartões, sem precisar do Anki; `tests/test_decks.py` (quais baralhos são matérias) usa o pacote `anki` e é pulado onde ele não estiver instalado.
 - `dev/run_gui_test.sh <pasta>`: abre um Anki de verdade numa tela virtual com um perfil de teste, clica por todas as telas (estudo, Roleta, importação de backup, cartões de um tópico, caderno de erros, baralho do tópico, renomear, mover, arrastar e excluir baralhos, Lixeira, dobrar seções, Ctrl+Z, a volta pelo botão do Anki, tema escuro), tira capturas, mede os sons e mostra o que ficou gravado no histórico de revisões. Precisa de `pip install aqt` e `xvfb`.
 - `PAINEL_SCENARIO=back dev/run_gui_test.sh <pasta>`: só a ida para a interface do Anki e a volta, pelo menu e pelo botão.
-- `python3 dev/celular_sim.py <pasta>`: renderiza cartões de teste com o bloco do celular, monta páginas no formato da tela de estudo do AnkiDroid e toca nas opções numa tela do tamanho de um celular, com capturas.
+- `python3 dev/celular_sim.py <pasta>`: renderiza cartões de teste com o bloco do celular, monta páginas no formato da tela de estudo do AnkiDroid e toca nas opções numa tela do tamanho de um celular, com capturas. Para o Modo voz, um substituto da API JavaScript do AnkiDroid anota o que seria falado e devolve respostas faladas de mentira (certo, letra, mostrar, notas, silêncio, sem internet, sem permissão).
 - `python3 build.py`: gera `dist/painel_estudos-<versão>.ankiaddon`. Cada versão publicada é copiada para `versoes/`.
 
 Fontes: Barlow e Barlow Semi Condensed, licença SIL Open Font License (`painel_estudos/web/fonts/OFL-Barlow.txt`).
