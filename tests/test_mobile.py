@@ -72,3 +72,12 @@ def test_the_panel_reads_cards_that_carry_the_block():
     ce_front = "[Art. 155, §1º] A pena aumenta-se de metade.<br><br>( ) Certo &nbsp;&nbsp;&nbsp; ( ) Errado"
     parsed = cards.parse(style_tag + ce_front + block_q, style_tag + ce_front + block_q + "<hr id=answer><b>❌ ERRADO</b><br><br>🔁 metade → <b>1/3</b>" + block_a)
     assert parsed.mode == "ce" and parsed.correct == "ERRADO" and parsed.trap == ("metade", "1/3")
+
+
+def test_every_note_type_but_image_occlusion_takes_the_block():
+    basic = [{"qfmt": FRONT, "afmt": BACK}]
+    cloze = [{"qfmt": "{{cloze:Texto}}", "afmt": "{{cloze:Texto}}<br>\n{{Verso Extra}}"}]
+    occlusion = [{"qfmt": "{{#Header}}<div>{{Header}}</div>{{/Header}}\n<div style=\"display: none\">{{cloze:Occlusion}}</div>\n<div id=\"err\"></div>\n<div id=\"image-occlusion-container\">{{Image}}<canvas id=\"image-occlusion-canvas\"></canvas></div>", "afmt": "{{FrontSide}}"}]
+    assert mobile.eligible(basic) and mobile.eligible(cloze)
+    assert not mobile.eligible(occlusion)
+    assert mobile.VERSION >= 2  # 2: Modo voz

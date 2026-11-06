@@ -1,4 +1,5 @@
-/* Painel de Estudos no celular: os botões C/E e as letras das questões dentro do próprio cartão.
+/* Painel de Estudos no celular: os botões C/E, as letras das questões e o Modo voz, dentro do
+ * próprio cartão.
  *
  * Vai no modelo de cartão (frente e verso) quando o painel ativa "Celular" em Ajustes, e só age no
  * AnkiDroid. No Anki do computador e dentro do painel o cartão continua como está.
@@ -10,19 +11,32 @@
  * (buttonAnswerEase1 a 4). A tela de estudo nova do AnkiDroid ainda não aceita esses sinais, então
  * nela o verso mostra o resultado e a nota fica nos botões do próprio AnkiDroid.
  *
+ * Modo voz: o cartão é lido em voz alta (ankiTtsSpeak, da API de JavaScript do AnkiDroid) e a
+ * resposta é ouvida (ankiSttStart; o que foi dito volta por window.ankiSttResult). Fica ligado
+ * durante a sessão de estudo (sessionStorage), cartão após cartão, até dizer "parar" ou tocar em
+ * Parar. Só na tela de estudo padrão, a que aceita a nota dada pelo cartão.
+ *
  * Este arquivo não pode ter chaves duplas seguidas: o Anki leria como campo do modelo.
  */
 (function () {
   "use strict";
   var root = document.documentElement;
+
+  // AnkiDroid's js-api.js declares AnkiDroidJS as a class at the top level of a script: a global
+  // name, but not a property of window.
+  function apiClass() {
+    if (typeof AnkiDroidJS === "function") return AnkiDroidJS; // eslint-disable-line no-undef
+    return typeof window.AnkiDroidJS === "function" ? window.AnkiDroidJS : null;
+  }
+
   // AnkiDroid's card page marks <html> with "android" and defines showAnswer(); both study screens do.
-  var onAndroid = (root.classList.contains("android") || typeof window.AnkiDroidJS === "function") && typeof window.showAnswer === "function";
+  var onAndroid = (root.classList.contains("android") || !!apiClass()) && typeof window.showAnswer === "function";
   if (!onAndroid) return;
 
   var KEY = "painelEstudosEscolha";
   var DEV = "https://github.com/jpvanacor/painel-estudos-anki";
   var MAX_AGE = 30 * 60 * 1000;
-  var CE_RE = /\(\s*\)\s*Certo[\s ]*\(\s*\)\s*Errado/i;
+  var CE_RE = /\(\s*\)\s*Certo[\s ]*\(\s*\)\s*Errado/i;
   var CE_ANS_RE = /^[\W_]*(?:gabarito\s*[:\-]?\s*)?(certo|errado)\b/i;
   var MC_ANS_RE = /gabarito\s*[:\-]?\s*(?:letra\s+)?\(?([A-E])\)?(?![\w])/i;
   var ALT_RE = /^\s*\(?([A-E])\s*\)/;
@@ -58,17 +72,25 @@
     return out;
   }
 
-  // Text of one side with line breaks where <br> and blocks are, for finding the alternatives.
-  function linesOf(which, mark) {
+  // Text of one side with line breaks where <br> and blocks are, for finding the alternatives and
+  // for the voice. blanks: a cloze still hidden ("[...]" or "[dica]") is said as "lacuna".
+  function linesOf(which, mark, blanks) {
     var text = "";
     var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, null);
     while (walker.nextNode()) {
       var n = walker.currentNode;
       if (skipped(n, document.body) || side(n, mark) !== which) continue;
-      if (n.nodeType === 3) text += n.nodeValue;
-      else if (n.nodeName === "BR" || BLOCKS[n.nodeName]) text += "\n";
+      if (n.nodeType === 3) {
+        var p = n.parentNode;
+        text += blanks && p && p.closest && p.closest(".cloze") ? blank(n.nodeValue) : n.nodeValue;
+      } else if (n.nodeName === "BR" || BLOCKS[n.nodeName]) text += "\n";
     }
     return text.split("\n");
+  }
+
+  function blank(s) {
+    var h = squash(s).replace(/^\[|\]$/g, "");
+    return h && h !== "..." && h !== "…" ? " lacuna (dica: " + h + ") " : " lacuna ";
   }
 
   function joined(nodes) {
@@ -78,7 +100,27 @@
   }
 
   function squash(s) {
-    return String(s || "").replace(/[\s ]+/g, " ").trim();
+    return String(s || "").replace(/[\s ]+/g, " ").trim();
+  }
+
+  // Lines to sentences for the voice: a pause between lines, never two stops in a row. In a
+  // question, "A) texto" is said "Letra A: texto".
+  function speechOf(lines, mc) {
+    var s = "";
+    for (var i = 0; i < lines.length; i++) {
+      var l = squash(lines[i]);
+      var m = mc ? ALT_RE.exec(l) : null;
+      if (m) l = "Letra " + m[1].toUpperCase() + ": " + squash(l.slice(m[0].length));
+      s = joinSpeech(s, l);
+    }
+    return s;
+  }
+
+  function joinSpeech(a, b) {
+    a = squash(a);
+    b = squash(b);
+    if (!a || !b) return a || b;
+    return a + (/[.!?:;…,]$/.test(a) ? " " : ". ") + b;
   }
 
   // The same statement gives the same key on the front and on the back.
@@ -164,13 +206,35 @@
     }
   }
 
-  // ------------------------------------------------------------ talking to AnkiDroid
-  function api() {
+  function getItem(key) {
     try {
-      return new window.AnkiDroidJS({ developer: DEV, version: "0.0.3" });
+      return window.sessionStorage.getItem(key);
     } catch (e) {
       return null;
     }
+  }
+
+  function setItem(key, value) {
+    try {
+      if (value == null) window.sessionStorage.removeItem(key);
+      else window.sessionStorage.setItem(key, String(value));
+    } catch (e) {
+      /* no storage: voice mode lasts one card */
+    }
+  }
+
+  // ------------------------------------------------------------ talking to AnkiDroid
+  var API = null;
+  function api() {
+    if (API) return API;
+    var C = apiClass();
+    if (!C) return null;
+    try {
+      API = new C({ developer: DEV, version: "0.0.3" });
+    } catch (e) {
+      API = null;
+    }
+    return API;
   }
 
   function flip() {
@@ -288,40 +352,56 @@
     }
     row.addEventListener("click", function (ev) {
       var b = ev.target.closest ? ev.target.closest(".pe-g") : null;
-      if (!b || row.getAttribute("data-sent")) return;
-      row.setAttribute("data-sent", "1");
-      b.classList.add("pe-pressed");
-      grade(Number(b.getAttribute("data-ease")));
+      if (!b) return;
+      voiceQuiet();
+      sendGrade(row, Number(b.getAttribute("data-ease")));
     });
     return row;
   }
 
+  // Gives the grade once, from a tap or from the voice.
+  function sendGrade(row, n) {
+    if (row) {
+      if (row.getAttribute("data-sent")) return;
+      row.setAttribute("data-sent", "1");
+      var b = row.querySelector('.pe-g[data-ease="' + n + '"]');
+      if (b) b.classList.add("pe-pressed");
+    }
+    grade(n);
+  }
+
   // ------------------------------------------------------------ the two sides
+  // Each returns what the voice mode needs to know about the card.
   function question() {
     var nodes = textNodes("front", null);
     var text = joined(nodes);
     var ce = CE_RE.test(text);
     var letters = ce ? null : lettersOf(linesOf("front", null));
-    if (!ce && !letters) return;
+    if (!ce && !letters) return { kind: "basic", text: speechOf(linesOf("front", null, true)) };
     var key = keyOf(text);
     var box = options(ce, letters);
     placeOptions(nodes, box, document.querySelector('.pe-m[data-side="q"]'));
-    var pick = function (b) {
-      save({ v: b.getAttribute("data-v"), k: key, t: Date.now() });
+    var info = { kind: ce ? "ce" : "mc", letters: ce ? ["CERTO", "ERRADO"] : letters, box: box };
+    info.text = speechOf(linesOf("front", null, true), !ce); // without the "( ) Certo ( ) Errado" line
+    info.choose = function (v) {
+      if (box.getAttribute("data-sent")) return;
+      box.setAttribute("data-sent", "1");
+      save({ v: v, k: key, t: Date.now() });
+      var b = box.querySelector('.pe-opt[data-v="' + v + '"]');
+      if (b) b.classList.add("pe-chosen");
+      voiceQuiet();
+      setTimeout(flip, 140);
     };
     // The choice is kept on the first touch, before AnkiDroid's own tap gestures can flip the card.
     box.addEventListener("pointerdown", function (ev) {
       var b = ev.target.closest ? ev.target.closest(".pe-opt") : null;
-      if (b && !box.getAttribute("data-sent")) pick(b);
+      if (b && !box.getAttribute("data-sent")) save({ v: b.getAttribute("data-v"), k: key, t: Date.now() });
     });
     box.addEventListener("click", function (ev) {
       var b = ev.target.closest ? ev.target.closest(".pe-opt") : null;
-      if (!b || box.getAttribute("data-sent")) return;
-      box.setAttribute("data-sent", "1");
-      pick(b);
-      b.classList.add("pe-chosen");
-      setTimeout(flip, 140);
+      if (b) info.choose(b.getAttribute("data-v"));
     });
+    return info;
   }
 
   function answer(mark) {
@@ -329,36 +409,489 @@
     var text = joined(nodes);
     var ce = CE_RE.test(text);
     var letters = ce ? null : lettersOf(linesOf("front", mark));
-    if (!ce && !letters) return;
     var backLines = linesOf("back", mark);
+    var basic = { kind: "basic", back: backLines };
+    if (!ce && !letters) return basic;
     var backText = squash(backLines.join(" "));
     var m = ce ? CE_ANS_RE.exec(backText) : MC_ANS_RE.exec(backText.slice(0, 200));
-    if (!m) return; // not a Certo/Errado item or a question with a gabarito
+    if (!m) return basic; // not a Certo/Errado item or a question with a gabarito
     var correct = m[1].toUpperCase();
-    if (!ce && letters.indexOf(correct) < 0) return;
+    if (!ce && letters.indexOf(correct) < 0) return basic;
     var rec = take();
     var choice = rec && rec.k === keyOf(text) && Date.now() - rec.t < MAX_AGE ? rec.v : null;
     var box = options(ce, letters);
     placeOptions(nodes, box, mark);
     markOptions(box, choice, correct);
-    if (!choice) return; // the card was turned without choosing: the gabarito is marked, nothing else
-    var right = choice === correct;
+    var info = { kind: ce ? "ce" : "mc", correct: correct, choice: choice, right: choice === correct, back: backLines, trap: null, row: null };
+    if (!choice) return info; // the card was turned without choosing: the gabarito is marked, nothing else
     var word = ce ? (correct === "CERTO" ? "Certo" : "Errado") : correct;
-    var verdict = el("div", "pe-ui pe-verdict " + (right ? "pe-right" : "pe-wrong"), (right ? "Você acertou." : "Você errou.") + "<small>Gabarito: " + word + "</small>");
+    var verdict = el("div", "pe-ui pe-verdict " + (info.right ? "pe-right" : "pe-wrong"), (info.right ? "Você acertou." : "Você errou.") + "<small>Gabarito: " + word + "</small>");
     box.parentNode.insertBefore(verdict, box.nextSibling);
     if (ce && correct === "ERRADO") {
       for (var i = 0; i < backLines.length; i++) {
         var t = TRAP_RE.exec(backLines[i]);
         if (t) {
-          markTrap(t[1], squash(t[2]));
+          info.trap = { from: squash(t[1]), to: squash(t[2]) };
+          markTrap(t[1], info.trap.to);
           break;
         }
       }
     }
     var end = document.querySelector('.pe-m[data-side="a"]');
-    var row = gradeRow(right);
+    var row = gradeRow(info.right);
     if (end && end.parentNode) end.parentNode.insertBefore(row, end);
     else document.body.appendChild(row);
+    if (row.classList.contains("pe-grade")) info.row = row;
+    return info;
+  }
+
+  // ------------------------------------------------------------ Modo voz
+  var VOICE_KEY = "painelEstudosVoz";
+  var RATE_KEY = "painelEstudosVozRitmo";
+  var COUNT_KEY = "painelEstudosVozCartoes";
+  var LANG = "pt-BR";
+  var MAX_FAILS = 3;
+  var MAX_SILENT = 10;
+  var voice = { on: false, side: null, info: null, listening: false, fails: 0, silent: 0, timer: null, bar: null, langs: {}, warned: false };
+
+  // What the card says, as it should sound: no emoji, abbreviations of the law spelled out,
+  // "05 (cinco)" read once.
+  var CODES = {
+    "CF/88": "Constituição Federal",
+    CF: "Constituição Federal",
+    CP: "Código Penal",
+    CPP: "Código de Processo Penal",
+    CPC: "Código de Processo Civil",
+    CC: "Código Civil",
+    CTN: "Código Tributário Nacional",
+    CDC: "Código de Defesa do Consumidor",
+    ECA: "Estatuto da Criança e do Adolescente",
+    LINDB: "Lei de Introdução às Normas do Direito Brasileiro",
+    STF: "S T F",
+    STJ: "S T J",
+    TJRS: "T J R S",
+  };
+  function speakable(s) {
+    s = String(s || "");
+    s = s.replace(/[\u{1F000}-\u{1FAFF}\u{2190}-\u{21FF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}\u{200D}]/gu, " ");
+    s = s.replace(/(\b\d{1,3}(?:\/\d{1,3})?)\s*\(([a-zà-ú\s-]{2,40})\)/g, "$2");
+    s = s.replace(/\bArts\.\s*/g, "artigos ").replace(/\bArt\.\s*/gi, "artigo ");
+    s = s.replace(/§§\s*/g, "parágrafos ").replace(/§\s*/g, "parágrafo ");
+    s = s.replace(/\bn[º°]\s*/gi, "número ").replace(/\binc\.\s*/gi, "inciso ").replace(/\bal\.\s*/gi, "alínea ");
+    s = s.replace(/\b(CF\/88|CF|CPP|CPC|CP|CC|CTN|CDC|ECA|LINDB|STF|STJ|TJRS)\b/g, function (m) {
+      return CODES[m];
+    });
+    s = s.replace(/\b(\d{1,2}\.\d{3})\/(\d{2}|\d{4})\b/g, "$1 de $2"); // Lei 14.133/2021
+    s = s.replace(/\]\s*(?=[A-ZÀ-Ý])/g, ". ").replace(/[\[\]]/g, " ").replace(/\s[–—]\s/g, ", ");
+    return squash(s);
+  }
+
+  // Android's voice takes up to about 4000 characters at a time.
+  function chunks(text) {
+    var out = [];
+    while (text.length > 3500) {
+      var cut = text.lastIndexOf(". ", 3500);
+      if (cut < 1000) cut = 3500;
+      out.push(text.slice(0, cut + 1));
+      text = text.slice(cut + 1);
+    }
+    if (squash(text)) out.push(text);
+    return out;
+  }
+
+  function norm(s) {
+    var t = String(s || "").toLowerCase();
+    if (t.normalize) t = t.normalize("NFD").replace(/[̀-ͯ]/g, "");
+    return squash(t.replace(/[^a-z0-9\s]/g, " "));
+  }
+
+  function rate() {
+    var r = parseFloat(getItem(RATE_KEY));
+    return r >= 0.6 && r <= 2 ? r : 1;
+  }
+
+  // The words that work on this side, shown while listening; said aloud only on the first cards.
+  function hint(sideName, info) {
+    if (sideName === "q") {
+      if (info.kind === "ce") return "certo ou errado";
+      if (info.kind === "mc") return "letra " + info.letters.join(", ");
+      return "mostrar";
+    }
+    if (info.kind !== "basic" && info.choice) return info.right ? "difícil, bom ou fácil" : "continuar";
+    return "errei, difícil, bom ou fácil";
+  }
+
+  function frontSpeech(info, prompt) {
+    var s = info.text || "";
+    if (!prompt) return s;
+    if (info.kind === "ce") return joinSpeech(s, "Certo ou errado?");
+    if (info.kind === "mc") return joinSpeech(s, "Qual é a letra?");
+    return joinSpeech(s, "Diga mostrar para ver a resposta.");
+  }
+
+  function backSpeech(info, prompt) {
+    var s;
+    if (info.kind === "basic") s = speechOf(info.back);
+    else {
+      var g = info.kind === "ce" ? (info.correct === "CERTO" ? "certo" : "errado") : "letra " + info.correct;
+      s = info.choice ? (info.right ? "Você acertou. " : "Você errou. ") : "";
+      s += "Gabarito: " + g + ".";
+      if (info.trap) s += " A lei diz " + info.trap.to + ", não " + info.trap.from + ".";
+    }
+    if (prompt) s = joinSpeech(s, hint("a", info).replace(/^./, function (c) { return c.toUpperCase(); }) + "?");
+    return s;
+  }
+
+  // The back without the gabarito line and the 🔁 line: what "explica" reads.
+  function explanation(info) {
+    var lines = [];
+    for (var i = 0; i < info.back.length; i++) {
+      var l = squash(info.back[i]);
+      if (!l || TRAP_RE.test(l)) continue;
+      if (!lines.length && info.kind !== "basic" && (CE_ANS_RE.test(l) || /gabarito/i.test(l))) continue;
+      lines.push(l);
+    }
+    return lines.length ? speechOf(lines, info.kind === "mc") : "Não há explicação no verso deste cartão.";
+  }
+
+  // ---- what was said -> what to do
+  var STOP_RE = /^(?:(parar|pare|pausa|pausar|desliga|desligar|desligue|chega|sair|encerrar|encerra)\b|para$)/;
+  var REPEAT_RE = /\b(repete|repetir|repita|outra vez|le de novo|leia de novo)\b/;
+  var FASTER_RE = /\b(mais rapido|acelera|acelerar)\b/;
+  var SLOWER_RE = /\b(mais devagar|mais lento|devagar)\b/;
+  var EXPLAIN_RE = /\b(explica|explicar|explique|explicacao|comentario|fundamento|le o verso|leia o verso)\b/;
+  var SHOW_RE = /\b(mostrar|mostra|mostre|virar|vira|resposta|pronto|revelar)\b/;
+  var LETTER_WORDS = { a: "A", ah: "A", b: "B", be: "B", bi: "B", c: "C", ce: "C", se: "C", d: "D", de: "D", e: "E", eh: "E" };
+  var ORDINALS = { primeira: "A", segunda: "B", terceira: "C", quarta: "D", quinta: "E" };
+
+  function understandOne(said, sideName, info) {
+    var s = norm(said);
+    if (!s) return null;
+    if (STOP_RE.test(s)) return { type: "stop" };
+    if (REPEAT_RE.test(s)) return { type: "repeat" };
+    if (FASTER_RE.test(s)) return { type: "rate", by: 0.15 };
+    if (SLOWER_RE.test(s)) return { type: "rate", by: -0.15 };
+    if (sideName === "q") {
+      if (info.kind === "ce") {
+        var yes = /\b(certo|certa|correto|correta|verdadeiro|verdadeira|verdade)\b/.test(s) || /^(c|ce|se|sim)$/.test(s);
+        var no = /\b(errado|errada|incorreto|incorreta|falso|falsa)\b/.test(s) || /^(e|eh|nao)$/.test(s);
+        if (yes !== no) return { type: "choice", v: yes ? "CERTO" : "ERRADO" };
+      } else if (info.kind === "mc") {
+        var m = /\b(?:letra|alternativa|opcao|item)\s+([a-e]|be|bi|ce|se|de|eh)\b/.exec(s);
+        var o = /\b(primeira|segunda|terceira|quarta|quinta)\b/.exec(s);
+        var v = m ? LETTER_WORDS[m[1]] : LETTER_WORDS[s] || (o ? ORDINALS[o[1]] : null);
+        if (v && info.letters.indexOf(v) >= 0) return { type: "choice", v: v };
+      }
+      if (SHOW_RE.test(s)) return { type: "flip" };
+      return null;
+    }
+    if (EXPLAIN_RE.test(s)) return { type: "explain" };
+    if (info.kind !== "basic" && info.choice) {
+      if (!info.right) {
+        if (/\b(continuar|continua|proximo|proxima|seguir|segue|ok|okay|beleza|de novo|errei|bom|boa|facil|dificil|certo)\b/.test(s)) return { type: "grade", n: 1 };
+        return null;
+      }
+      if (/\bfacil\b/.test(s)) return { type: "grade", n: 4 };
+      if (/\bdificil\b/.test(s)) return { type: "grade", n: 2 };
+      if (/\b(bom|boa|proximo|proxima|continuar|continua|seguir|segue|ok|okay|beleza|certo)\b/.test(s)) return { type: "grade", n: 3 };
+      return null;
+    }
+    if (/\b(errei|de novo|nao sabia|nao lembrei|esqueci|errado)\b/.test(s)) return { type: "grade", n: 1 };
+    if (/\bfacil\b/.test(s)) return { type: "grade", n: 4 };
+    if (/\bdificil\b/.test(s)) return { type: "grade", n: 2 };
+    if (/\b(bom|boa|acertei|sabia|lembrei|certo|proximo|proxima|continuar|ok)\b/.test(s)) return { type: "grade", n: 3 };
+    return null;
+  }
+
+  // The recognizer sends a few guesses, best first: the first one that means something wins.
+  function understand(guesses, sideName, info) {
+    for (var i = 0; i < guesses.length; i++) {
+      var cmd = understandOne(guesses[i], sideName, info);
+      if (cmd) return cmd;
+    }
+    return null;
+  }
+
+  // ---- the bar on the card
+  function voiceBar() {
+    var bar = el("div", "pe-ui pe-voz");
+    bar.innerHTML = '<button type="button" class="pe-voz-btn"></button><span class="pe-voz-msg" aria-live="polite"></span>';
+    bar.addEventListener("click", function (ev) {
+      var b = ev.target.closest ? ev.target.closest(".pe-voz-btn") : null;
+      if (!b) return;
+      var state = bar.getAttribute("data-state");
+      if (state === "off" || state === "error") voiceOn();
+      else if (state === "paused") {
+        voice.fails = voice.silent = 0;
+        listen();
+      } else voiceOff("Modo voz desligado.");
+    });
+    document.body.insertBefore(bar, document.body.firstChild);
+    return bar;
+  }
+
+  function show(state, msg) {
+    var bar = voice.bar;
+    if (!bar) return;
+    bar.setAttribute("data-state", state);
+    bar.className = "pe-ui pe-voz pe-voz-" + state;
+    var labels = { off: "🎤 Modo voz", error: "🎤 Tentar de novo", paused: "Continuar", reading: "Parar", listening: "Parar" };
+    bar.querySelector(".pe-voz-btn").textContent = labels[state] || "Parar";
+    bar.querySelector(".pe-voz-msg").textContent = msg || "";
+  }
+
+  function langOnce(kind, fn) {
+    if (!voice.langs[kind]) {
+      voice.langs[kind] = Promise.resolve()
+        .then(fn)
+        .catch(function () {
+          return null;
+        });
+    }
+    return voice.langs[kind];
+  }
+
+  // Reads the text, then calls then() when the voice has finished.
+  function speak(text, then) {
+    var a = api();
+    if (!a || !voice.on) return;
+    var parts = chunks(speakable(text));
+    if (!parts.length) return then && then();
+    show("reading", "Lendo…");
+    var go = function () {
+      var p = Promise.resolve();
+      parts.forEach(function (t, i) {
+        p = p.then(function () {
+          return a.ankiTtsSpeak(t, i ? 1 : 0);
+        });
+      });
+      return p;
+    };
+    langOnce("tts", function () {
+      return a.ankiTtsSetLanguage(LANG).then(function (r) {
+        // below 0: Android has no Portuguese voice (or its data is missing)
+        if (r && typeof r.value === "number" && r.value < 0 && !voice.warned) {
+          voice.warned = true;
+          show("reading", "Sem voz em português no Android: instale nas configurações de texto para fala.");
+        }
+      });
+    })
+      .then(function () {
+        return a.ankiTtsSetSpeechRate(rate());
+      })
+      .then(go)
+      .then(
+        function () {
+          waitQuiet(then, go);
+        },
+        function () {
+          if (then) then();
+        }
+      );
+  }
+
+  // Waits for the voice to start and then to stop. If it never starts (the voice can still be
+  // loading on the first card), says it once more.
+  function waitQuiet(then, again) {
+    var a = api();
+    var t0 = Date.now();
+    var quiet = 0;
+    var heard = false;
+    var retried = false;
+    (function poll() {
+      if (!voice.on) return;
+      a.ankiTtsIsSpeaking().then(
+        function (r) {
+          var speaking = !!(r && r.value);
+          if (speaking) {
+            heard = true;
+            quiet = 0;
+          } else quiet++;
+          var waited = Date.now() - t0;
+          if (!heard && waited > 1500 && !retried && again) {
+            retried = true;
+            t0 = Date.now();
+            again();
+          } else if ((heard && quiet >= 2) || (!heard && waited > 1500) || waited > 180000) {
+            if (then) then();
+            return;
+          }
+          setTimeout(poll, 250);
+        },
+        function () {
+          if (then) then();
+        }
+      );
+    })();
+  }
+
+  function listen() {
+    var a = api();
+    if (!a || !voice.on) return;
+    voice.listening = true;
+    show("listening", "Ouvindo… diga " + hint(voice.side, voice.info));
+    clearTimeout(voice.timer);
+    // if AnkiDroid never answers, try again
+    voice.timer = setTimeout(function () {
+      if (!voice.listening) return;
+      voice.listening = false;
+      missed(false);
+    }, 20000);
+    langOnce("stt", function () {
+      return a.ankiSttSetLanguage(LANG);
+    })
+      .then(function () {
+        return a.ankiSttStart();
+      })
+      .catch(function () {
+        voice.listening = false;
+        clearTimeout(voice.timer);
+        failed("O AnkiDroid não respondeu ao pedido para ouvir.");
+      });
+  }
+
+  // AnkiDroid calls this with what was heard: {"success": true, "value": "[\"certo\", ...]"}, as text.
+  function onHeard(raw) {
+    if (!voice.listening) return; // not asked by this side of the card
+    voice.listening = false;
+    clearTimeout(voice.timer);
+    var r = null;
+    try {
+      r = typeof raw === "string" ? JSON.parse(raw) : raw;
+    } catch (e) {
+      r = null;
+    }
+    if (!r || r.success === false) return heardError(r ? String(r.value || "") : "");
+    var guesses = [];
+    try {
+      guesses = JSON.parse(r.value);
+    } catch (e) {
+      guesses = [String(r.value || "")];
+    }
+    if (!Array.isArray(guesses)) guesses = [String(guesses)];
+    var cmd = understand(guesses, voice.side, voice.info);
+    if (!cmd) return missed(true);
+    voice.fails = voice.silent = 0;
+    act(cmd);
+  }
+
+  // AnkiDroid's words for what went wrong (JavaScriptSTT.kt).
+  function heardError(msg) {
+    if (/permission/i.test(msg)) {
+      return failed("O AnkiDroid não tem permissão para usar o microfone. Ative em Configurações do Android, Apps, AnkiDroid, Permissões, Microfone.");
+    }
+    if (/not available/i.test(msg)) return failed("O reconhecimento de voz não está disponível neste celular.");
+    if (/network|server/i.test(msg)) return retry("sem conexão para reconhecer a voz (sem internet, o Android precisa do português offline).");
+    if (/busy|client|audio|starting/i.test(msg)) return retry("o microfone não respondeu.");
+    missed(false); // silence ("No match found", "Speech timeout")
+  }
+
+  function retry(why) {
+    voice.fails++;
+    if (voice.fails >= MAX_FAILS) return pause(why);
+    setTimeout(listen, 800);
+  }
+
+  // Words that mean nothing here: three in a row pause. Silence: it keeps listening for about a
+  // minute, time to think, then pauses.
+  function missed(spoken) {
+    if (spoken) voice.fails++;
+    else voice.silent++;
+    if (voice.fails >= MAX_FAILS) return pause("não entendi o que foi dito.");
+    if (voice.silent >= MAX_SILENT) return pause();
+    if (spoken) speak("Não entendi.", listen);
+    else listen();
+  }
+
+  function pause(why) {
+    var msg = "Pausado: " + (why || "não ouvi uma resposta.");
+    show("paused", msg);
+    speak("Pausado.", function () {
+      show("paused", msg + " Toque em Continuar.");
+    });
+  }
+
+  function failed(msg) {
+    voice.on = false;
+    voice.listening = false;
+    setItem(VOICE_KEY, null);
+    show("error", msg);
+  }
+
+  function act(cmd) {
+    var info = voice.info;
+    if (cmd.type === "stop") return voiceOff("Modo voz desligado.");
+    if (cmd.type === "repeat") return run(false);
+    if (cmd.type === "rate") {
+      setItem(RATE_KEY, Math.max(0.6, Math.min(2, Math.round((rate() + cmd.by) * 100) / 100)));
+      return speak(cmd.by > 0 ? "Mais rápido." : "Mais devagar.", listen);
+    }
+    if (cmd.type === "explain") return speak(explanation(info), listen);
+    if (cmd.type === "choice") {
+      show("reading", "Resposta: " + (info.kind === "ce" ? (cmd.v === "CERTO" ? "Certo" : "Errado") : "letra " + cmd.v));
+      return info.choose(cmd.v);
+    }
+    if (cmd.type === "flip") {
+      voiceQuiet();
+      return flip();
+    }
+    if (cmd.type === "grade") {
+      voiceQuiet();
+      show("reading", ["", "De novo", "Difícil", "Bom", "Fácil"][cmd.n]);
+      sendGrade(info.row, cmd.n);
+    }
+  }
+
+  // Reads this side and listens. The first cards of a session also say which words work (both
+  // sides of each: the front counts the card).
+  function run(count) {
+    var info = voice.info;
+    var n = parseInt(getItem(COUNT_KEY), 10) || 0;
+    if (count) setItem(COUNT_KEY, ++n);
+    var prompt = n <= 3;
+    var text = voice.side === "q" ? frontSpeech(info, prompt) : backSpeech(info, prompt);
+    voice.fails = voice.silent = 0;
+    speak(text, listen);
+  }
+
+  function voiceOn() {
+    voice.on = true;
+    voice.fails = voice.silent = 0;
+    setItem(VOICE_KEY, "1");
+    run(voice.side === "q");
+  }
+
+  function voiceOff(msg) {
+    voice.on = false;
+    setItem(VOICE_KEY, null);
+    voiceQuiet();
+    show("off", msg || "");
+  }
+
+  // Stops speaking and listening (a tap, a grade, a flip).
+  function voiceQuiet() {
+    voice.listening = false;
+    clearTimeout(voice.timer);
+    var a = voice.on ? api() : null;
+    if (!a) return;
+    try {
+      a.ankiSttStop().catch(function () {});
+      a.ankiTtsStop().catch(function () {});
+    } catch (e) {
+      /* nothing to stop */
+    }
+  }
+
+  function voiceStart(sideName, info) {
+    if (!info || newScreen() || !api()) return; // the new screen can't take the grade from the card
+    voice.side = sideName;
+    voice.info = info;
+    voice.bar = voiceBar();
+    window.ankiSttResult = onHeard;
+    if (getItem(VOICE_KEY) === "1") {
+      voice.on = true;
+      run(sideName === "q");
+    } else show("off", "");
   }
 
   function start() {
@@ -367,11 +900,18 @@
     for (var i = 0; i < marks.length; i++) marks[i].setAttribute("data-done", "1");
     var mark = document.getElementById("answer");
     var onBack = !!mark || !!document.querySelector('.pe-m[data-side="a"]');
+    var info = null;
     try {
-      if (onBack && mark) answer(mark);
-      else if (!onBack) question();
+      if (!onBack) info = question();
+      else if (mark) info = answer(mark);
+      else info = { kind: "basic", back: linesOf("front", null) }; // a back without the front (cloze)
     } catch (e) {
-      /* the card stays as Anki drew it */
+      info = null; // the card stays as Anki drew it
+    }
+    try {
+      voiceStart(onBack ? "a" : "q", info);
+    } catch (e) {
+      /* no voice on this card */
     }
   }
 

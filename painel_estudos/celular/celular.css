@@ -55,3 +55,28 @@
 .night_mode .pe-g.pe-main, .nightMode .pe-g.pe-main { background: #e6e8ee; border-color: #e6e8ee; color: #14171f; }
 .night_mode .pe-trap, .nightMode .pe-trap { text-decoration-color: #f08a80; background: rgba(240, 138, 128, .16); }
 .night_mode .pe-fix, .nightMode .pe-fix { background: rgba(110, 200, 155, .18); color: #86dab0; }
+/* Modo voz: the bar at the top of the card */
+.pe-voz { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin: 0 0 12px; font-size: 14px; line-height: 1.3; text-align: left; }
+.pe-voz-btn {
+  flex: none; min-height: 36px; padding: 6px 14px; border: 1.5px solid #aeb9c9; border-radius: 999px;
+  background: #fff; color: #1e2333; font: inherit; font-size: 14px; font-weight: 600; -webkit-tap-highlight-color: transparent;
+}
+.pe-voz-msg { color: #646b78; }
+.pe-voz-msg:empty { display: none; }
+.pe-voz-reading .pe-voz-btn, .pe-voz-listening .pe-voz-btn { border-color: #c23b32; color: #c23b32; }
+.pe-voz-listening .pe-voz-msg::before {
+  content: ""; display: inline-block; width: 9px; height: 9px; margin-right: 7px; border-radius: 50%;
+  background: #c23b32; vertical-align: 1px; animation: pe-pulse 1.1s ease-in-out infinite;
+}
+@keyframes pe-pulse {
+  50% { opacity: .25; }
+}
+.pe-voz-paused .pe-voz-btn { background: #1e2333; border-color: #1e2333; color: #fff; }
+.pe-voz-error .pe-voz-msg { color: #c23b32; }
+.night_mode .pe-voz-btn, .nightMode .pe-voz-btn { background: #1b1f2a; color: #e6e8ee; border-color: #3d4556; }
+.night_mode .pe-voz-msg, .nightMode .pe-voz-msg { color: #9aa1ae; }
+.night_mode .pe-voz-reading .pe-voz-btn, .nightMode .pe-voz-reading .pe-voz-btn,
+.night_mode .pe-voz-listening .pe-voz-btn, .nightMode .pe-voz-listening .pe-voz-btn { border-color: #e5675d; color: #e5675d; }
+.night_mode .pe-voz-listening .pe-voz-msg::before, .nightMode .pe-voz-listening .pe-voz-msg::before { background: #e5675d; }
+.night_mode .pe-voz-paused .pe-voz-btn, .nightMode .pe-voz-paused .pe-voz-btn { background: #e6e8ee; border-color: #e6e8ee; color: #14171f; }
+.night_mode .pe-voz-error .pe-voz-msg, .nightMode .pe-voz-error .pe-voz-msg { color: #e5675d; }

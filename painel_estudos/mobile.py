@@ -2,7 +2,8 @@
 
 AnkiDroid doesn't run add-ons, but it runs the scripts in card templates, and the templates sync
 with the collection. So the panel puts celular/celular.js and celular.css at the end of the front
-and back templates of the note types that hold Certo/Errado items and questions. The block sits
+and back templates of the note types in use: the C/E buttons and the letters show on Certo/Errado
+items and questions, and the Modo voz on every card. The block sits
 between two HTML comments, so it can be updated or taken out without touching the rest of the
 template. Changing a template's text is not a schema change: it goes to the phone in a normal
 sync, not a full one.
@@ -15,12 +16,17 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-VERSION = 1
+VERSION = 2  # 2: Modo voz
 HERE = Path(__file__).parent / "celular"
 START_RE = re.compile(r"<!-- painel-estudos:celular v(\d+) -->")
 BLOCK_RE = re.compile(r"(?:\n\n)?<!-- painel-estudos:celular v\d+ -->.*?<!-- /painel-estudos:celular -->", re.S)
-# Notes that make a note type worth the block: Certo/Errado items and questions with a gabarito.
-NOTES_SQL = "select mid, count() from notes where flds like '%( ) Certo%' or flds like '%Gabarito:%' group by mid"
+# Notes per note type: the block goes into the ones in use.
+COUNT_SQL = "select mid, count() from notes group by mid"
+
+
+def eligible(templates: list[dict]) -> bool:
+    """Image occlusion cards are pictures: nothing to answer or to read aloud."""
+    return all("image-occlusion" not in (t.get("qfmt", "") + t.get("afmt", "")) for t in templates)
 
 
 def assets(folder: Path = HERE) -> tuple[str, str]:
