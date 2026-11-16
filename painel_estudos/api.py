@@ -36,7 +36,7 @@ from . import mobile
 from . import roleta as ro
 from . import stats, store, topics
 
-VERSION = "0.9.0"
+VERSION = "0.9.1"
 RATINGS = {1: CardAnswer.AGAIN, 2: CardAnswer.HARD, 3: CardAnswer.GOOD, 4: CardAnswer.EASY}
 # Topic and error sessions run in a filtered deck of their own, emptied and removed at the end.
 TEMP_DECK = "Painel de Estudos (sessão)"

@@ -63,7 +63,7 @@ Quem usava o Edital da versão 0.1 não perde nada: ao abrir a 0.2 ou mais nova,
 
 ## Instalar
 
-1. Na pasta [`versoes`](versoes), abra o arquivo da versão mais nova (hoje, `painel_estudos-0.9.0.ankiaddon`) e baixe pelo botão de download do GitHub.
+1. Na pasta [`versoes`](versoes), abra o arquivo da versão mais nova (hoje, `painel_estudos-0.9.1.ankiaddon`) e baixe pelo botão de download do GitHub.
 2. No Anki: Ferramentas, Extensões, Instalar de um arquivo. Escolha o arquivo e reinicie o Anki.
 
 Para atualizar, instale o arquivo novo do mesmo jeito. Se o celular estiver ativado e a versão nova trouxer um bloco novo, Ajustes mostra Atualizar; depois, sincronize o computador e então o celular. Se algo der errado, segure Shift enquanto abre o Anki: ele abre sem extensões.
