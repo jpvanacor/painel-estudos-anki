@@ -95,7 +95,7 @@ class Shell:
         self.web.stdHtml(
             '<div id="app"></div>',
             css=[f"{base}/app.css"],
-            js=[f"{base}/app.js"],
+            js=[f"{base}/predio.js", f"{base}/app.js"],
             context=self,
             default_css=False,
         )
