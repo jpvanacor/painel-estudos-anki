@@ -508,7 +508,8 @@
         ["C ou E", "responde Certo ou Errado"],
         ["A a E", "escolhe a alternativa"],
         ["Espaço ou Enter", "mostra a resposta; depois, Bom (ou Continuar, se errou)"],
-        ["1 a 4", "De novo, Difícil, Bom ou Fácil"],
+        ["1, 2 ou 3", "depois de acertar: Difícil, Bom ou Fácil"],
+        ["1 a 4", "nos outros cartões: De novo, Difícil, Bom ou Fácil"],
         ["N, C, A ou P", "depois de errar: Não sabia, Confundi, Falta de atenção ou Pegadinha"],
         ["R", "repete o áudio"],
         ["Ctrl+Z", "desfaz a última resposta"],
@@ -821,12 +822,13 @@
     </div>`;
   }
 
+  // The grade buttons, numbered from 1 in the order they appear: the number is the key.
   function gradeButtons(labels, ratings) {
     const names = { 1: "De novo", 2: "Difícil", 3: "Bom", 4: "Fácil" };
     return ratings
       .map(
-        (r) =>
-          `<button class="btn grade ${r === 3 ? "primary" : ""} ${r === 1 ? "again" : ""}" data-act="rate" data-r="${r}" title="Tecla ${r}"><span>${names[r]}</span><small>${esc(labels[r - 1])}</small></button>`
+        (r, i) =>
+          `<button class="btn grade ${r === 3 ? "primary" : ""} ${r === 1 ? "again" : ""}" data-act="rate" data-r="${r}" title="Tecla ${i + 1}"><span><kbd class="grade-key">${i + 1}</kbd>${names[r]}</span><small>${esc(labels[r - 1])}</small></button>`
       )
       .join("");
   }
@@ -1034,7 +1036,7 @@
           : `Tecle a letra da alternativa, de A a ${c.options[c.options.length - 1].letter}.`;
     } else if (S.result.right) {
       main = gradeButtons(S.result.labels, [2, 3, 4]);
-      hint = "Acertou com dúvida? Escolha Difícil.";
+      hint = "Teclas 1, 2 ou 3. Acertou com dúvida? Escolha Difícil.";
     } else {
       main = `<button class="btn primary grade" data-act="rate" data-r="1"><span>Continuar</span><small>De novo, ${esc(S.result.labels[0])}</small></button>`;
       hint = "Espaço para continuar.";
@@ -2990,7 +2992,11 @@ Regência verbal`;
       }
     } else if (S.phase === "result") {
       if (S.result.right) {
-        if (["2", "3", "4"].includes(k)) return rate(Number(k));
+        // the three buttons shown, from the left: 1 Difícil, 2 Bom, 3 Fácil
+        if (["1", "2", "3"].includes(k)) {
+          ev.preventDefault();
+          return rate(Number(k) + 1);
+        }
         if (go3) {
           ev.preventDefault();
           return rate(3);

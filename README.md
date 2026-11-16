@@ -14,7 +14,7 @@ Extensão do Anki que troca a janela principal por uma interface de estudo para 
   - Errou: o cartão vai direto para De novo, e dá para marcar o motivo (Não sabia, Confundi, Falta de atenção ou Pegadinha). Acertou: você escolhe Difícil, Bom ou Fácil.
   - Nos itens ERRADO, depois de responder, o enunciado mostra riscadas as palavras trocadas e, ao lado, o que a lei diz (pela linha 🔁 do verso).
   - Qualquer outro cartão funciona como no Anki: Mostrar resposta e os quatro botões.
-  - Teclas: C/E, A a E, Espaço, 1 a 4, Ctrl+Z para desfazer, Esc para encerrar. Depois de errar: N, C, A ou P para o motivo.
+  - Teclas: C/E, A a E, Espaço, Ctrl+Z para desfazer, Esc para encerrar. Depois de acertar: 1, 2 ou 3 para Difícil, Bom ou Fácil (o número aparece no botão). Depois de errar: 1 ou Espaço para Continuar, e N, C, A ou P para o motivo. Nos outros cartões: 1 a 4.
 - **Matérias**: cada baralho é uma matéria, com acerto em 30 dias, estágio dos cartões, os temas mais fracos pelas etiquetas e o andamento da Roleta.
   - Na página da matéria: Renomear muda o nome do baralho (ele continua no mesmo lugar) e, no fim da página, Excluir o baralho apaga o baralho, os baralhos de dentro dele e os cartões, como no Anki. A exclusão pede confirmação e dá para desfazer logo em seguida.
   - Os baralhos de dentro da matéria (os dos tópicos da Roleta, por exemplo) aparecem numa lista própria, cada um com Estudar, Procurar, Renomear, Mover e Excluir. Um baralho com outros dentro dobra, como no Anki.
