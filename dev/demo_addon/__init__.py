@@ -70,7 +70,7 @@ def advance():
     elif api.phase == "question":
         answer(True)
     else:
-        key("4")
+        key("3")  # after a right answer, 3 is Fácil
 
 
 def study_deck(name):
@@ -122,7 +122,7 @@ def topic_step():
         else:
             answer(True)
     elif api.phase == "result" and api.result and api.result["right"]:
-        key("3")
+        key("2")  # Bom
 
 
 def temp_deck_state(label):
@@ -259,7 +259,8 @@ STEPS = [
     (lambda: key(" "), 1800),
     (lambda: answer(True), 1600),
     (lambda: shot("04_ce_acertou"), 300),
-    (lambda: key("3"), 450),
+    (lambda: report("grade keys", "JSON.stringify([...document.querySelectorAll('.grade')].map(function(b){return b.innerText.replace(/\\s+/g,' ');}))"), 200),
+    (lambda: key("2"), 450),  # Bom
     (lambda: shot("05_meta_cumprida"), 2600),
     (lambda: key("z", ctrlKey=True), 1800),
     (lambda: report("after undo"), 300),
@@ -270,7 +271,7 @@ STEPS = [
     (lambda: shot("06_mc_errou"), 300),
     (lambda: key("enter"), 1800),
     (lambda: answer(True), 1600),
-    (lambda: key("2"), 1800),
+    (lambda: key("1"), 1800),  # Difícil
     (lambda: click('[data-act="end"]'), 1600),
     # normal cards until the deck is done
     (lambda: study_deck("Civil"), 2200),
