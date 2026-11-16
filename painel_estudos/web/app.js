@@ -187,16 +187,6 @@
           { f: 98, d: 0.14, g: 0.08, at: 0.5 },
         ]),
     done: () => [659.25, 830.61, 987.77, 1318.51].map((f, i) => ({ f, d: 0.4, g: 0.07, at: i * 0.1 })),
-    combo: () => [
-      { f: 880, d: 0.12, g: 0.05, type: "triangle" },
-      { f: 1174.66, d: 0.2, g: 0.06, at: 0.08, type: "triangle" },
-    ],
-    levelup: () => [523.25, 659.25, 783.99, 1046.5, 1318.51, 1567.98].map((f, i) => ({ f, d: 0.32, g: 0.06, at: i * 0.07, type: i % 2 ? "triangle" : "sine" })),
-    badge: () => [
-      { f: 1318.51, d: 0.5, g: 0.05, type: "triangle" },
-      { f: 1567.98, d: 0.6, g: 0.04, at: 0.12, type: "triangle" },
-      { f: 2093, d: 0.7, g: 0.03, at: 0.24 },
-    ],
   };
 
   function schedule(ctx, dest, notes, t0) {
@@ -523,7 +513,7 @@
         ["N, C, A ou P", "depois de errar: Não sabia, Confundi, Falta de atenção ou Pegadinha"],
         ["R", "repete o áudio"],
         ["Ctrl+Z", "desfaz a última resposta"],
-        ["Esc", "encerra a sessão (com respostas, mostra o resumo; Esc de novo volta)"],
+        ["Esc", "encerra a sessão"],
       ],
     ],
     [
@@ -592,7 +582,6 @@
   }
 
   function page(content) {
-    if (S.predio) S.predio.inst.stop();
     const app = appEl();
     app.className = "app";
     app.innerHTML = `${rail()}<main class="main" id="main" tabindex="-1">${content}</main>`;
@@ -883,7 +872,6 @@
         ${soundButton()}
       </header>
       <div class="study-body" id="study-body"><div class="study-col" id="study-col">
-        ${c.game && S.fx.game !== false ? predioBlock(c.game) : ""}
         <div class="sheet" id="q"></div>
         <div id="choices">${choicesHtml()}</div>
         <div id="after"></div>
@@ -895,8 +883,6 @@
     else mountFrame(q, c.front, c.css, c.mode === "mc" ? "pe-left" : "");
     if (S.phase === "result") renderAfter(false, false);
     renderBar();
-    if (c.game && S.fx.game !== false) mountPredio(c.game, c.session.goal_reached);
-    else if (S.predio) S.predio.inst.stop();
     if (S.enter) {
       S.enter = false;
       animate(document.getElementById("study-col"), "enter");
@@ -1070,151 +1056,6 @@
     });
   }
 
-  // ---------------------------------------------------------------- o prédio
-  // The study game above the card: the pixel building (predio.js), level and XP, how much of
-  // the floor's matéria is learned, the combo and the session's answers.
-  const fmtN = (n) => Number(n || 0).toLocaleString("pt-BR");
-  const floorLabel = (f) => (f.i != null ? `${f.i + 1}º andar` : "Anexo");
-
-  function floorNote(f) {
-    if (!f.has_deck) return "Nenhum baralho com esse nome";
-    if (!f.open) return `Em obras até o nível ${f.unlock}`;
-    return `${f.total ? Math.floor((f.learned / f.total) * 100) : 0}% dos cartões aprendidos`;
-  }
-
-  function predioBlock(g) {
-    const f = g.floor;
-    const lvl = g.level;
-    const s = g.session;
-    const folded = isFolded("p.predio");
-    return `<section class="predio ${folded ? "folded" : ""}" data-fold="p.predio" aria-label="O prédio">
-      <div class="predio-stage" id="predio-slot">
-        ${f ? `<div class="predio-where"><b>${esc(floorLabel(f))}</b> ${esc(f.name)}${f.daily ? ` <span class="tag-day">matéria do dia</span>` : ""}</div>` : ""}
-        <div class="predio-flash" id="predio-flash" aria-live="polite"></div>
-      </div>
-      <div class="predio-hud">
-        <div class="hud-top"><b class="hud-lvl">Nível ${lvl.level}</b><button class="icon-btn hud-fold" data-act="fold" data-key="p.predio" aria-expanded="${!folded}" title="Mostrar ou esconder o prédio" aria-label="Mostrar ou esconder o prédio">${CHEVRON}</button></div>
-        <span class="hud-xp"><span class="xpbar" title="${fmtN(lvl.into)} de ${fmtN(lvl.need)} XP até o nível ${lvl.level + 1}"><i style="width:${Math.round((lvl.into / lvl.need) * 100)}%"></i></span><span class="muted num">${fmtN(lvl.into)} / ${fmtN(lvl.need)} XP</span></span>
-        ${f ? `<span class="hud-floor">${esc(floorNote(f))}</span>` : ""}
-        <span class="hud-row"><span class="hud-gain num" title="XP ganho nesta sessão">+${fmtN(s.gain)} XP</span><span class="hud-combo ${s.combo >= 3 ? "on" : ""}" id="hud-combo" title="Acertos seguidos">${s.combo >= 2 ? `x${s.combo}` : ""}</span></span>
-      </div>
-      ${trackHtml(s)}
-    </section>`;
-  }
-
-  function trackHtml(s) {
-    const res = s.results.slice(-160);
-    const rest = s.remaining;
-    const total = res.length + rest;
-    if (!total) return "";
-    const right = res.filter(Boolean).length;
-    const goalAt = s.goal_left > 0 && s.goal_left <= rest ? ((res.length + s.goal_left) / total) * 100 : null;
-    const label = `Sessão: ${right} certos e ${res.length - right} errados, ${plural(rest, "cartão falta", "cartões faltam")}${goalAt != null ? `; a meta do dia chega em ${plural(s.goal_left, "cartão", "cartões")}` : ""}`;
-    return `<div class="track" role="img" aria-label="${esc(label)}">${res.map((ok) => `<i class="${ok ? "r" : "w"}"></i>`).join("")}${rest ? `<i class="rest" style="flex:${rest}"></i>` : ""}${goalAt != null ? `<b class="goal-mark" style="left:${goalAt.toFixed(2)}%" title="Meta do dia"></b>` : ""}</div>`;
-  }
-
-  function predioLabel(g) {
-    const f = g.floor;
-    if (!f) return "O prédio";
-    return `O prédio: ${floorLabel(f)}, ${f.name}. ${floorNote(f)}. Nível ${g.level.level}.`;
-  }
-
-  function mountPredio(g, goalReached) {
-    const slot = document.getElementById("predio-slot");
-    if (!slot || !window.Predio) return;
-    if (!S.predio) {
-      const canvas = document.createElement("canvas");
-      canvas.width = window.Predio.W;
-      canvas.height = window.Predio.H;
-      canvas.className = "predio-canvas";
-      canvas.setAttribute("role", "img");
-      S.predio = { canvas, inst: window.Predio.create(canvas, { motion: motionOK }), queue: [], timer: null };
-    }
-    slot.prepend(S.predio.canvas);
-    S.predio.canvas.setAttribute("aria-label", predioLabel(g));
-    S.predio.inst.set(g);
-    S.predio.inst.start();
-    const events = (g.events || []).slice();
-    if (goalReached) events.push({ type: "goal" });
-    S.predio.inst.react(events);
-    predioMoments(events);
-  }
-
-  // The bigger moments get a line of text over the building (or a notice, with it folded) and a sound.
-  function predioMoments(events) {
-    let sound = null;
-    for (const e of events) {
-      let m = null;
-      if (e.type === "level") m = { big: `Nível ${e.n}`, small: "Você subiu de nível.", sound: "levelup" };
-      else if (e.type === "unlock") m = e.floor === "telhado" ? { big: "Telhado aberto", small: "O prédio está inteiro.", sound: "badge" } : { big: `Novo andar: ${e.name}`, small: `O ${e.floor} está aberto.`, sound: "badge" };
-      else if (e.type === "stage") m = { big: `${e.name} ganhou móveis`, small: "Mais cartões aprendidos, mais gente estudando no andar.", sound: "badge" };
-      else if (e.type === "badge") m = { big: `Conquista: ${e.name}`, small: e.desc || "", sound: "badge", trophy: true };
-      else if (e.type === "record") m = { big: e.text, small: "", sound: "badge" };
-      else if (e.type === "combo") {
-        animate(document.getElementById("hud-combo"), "pop");
-        if (e.n >= 10) m = { big: `${e.n} acertos seguidos`, small: "", sound: "combo" };
-        else sound = sound || "combo";
-      }
-      if (m) {
-        S.predio.queue.push(m);
-        sound = m.sound === "levelup" ? "levelup" : sound === "levelup" ? sound : m.sound;
-      }
-    }
-    if (sound) play(sound);
-    showMoment();
-  }
-
-  function showMoment() {
-    const p = S.predio;
-    if (!p || p.timer || !p.queue.length) return;
-    const m = p.queue.shift();
-    const flash = document.getElementById("predio-flash");
-    if (!flash || isFolded("p.predio")) {
-      toast(m.small ? `${m.big}. ${m.small}` : m.big);
-      p.timer = setTimeout(() => {
-        p.timer = null;
-        showMoment();
-      }, 300);
-      return;
-    }
-    flash.innerHTML = `<div class="moment">${m.trophy ? TROPHY : ""}<b>${esc(m.big)}</b>${m.small ? `<span>${esc(m.small)}</span>` : ""}</div>`;
-    animate(flash.firstElementChild, "rise");
-    p.timer = setTimeout(() => {
-      const el = document.getElementById("predio-flash");
-      if (el) el.innerHTML = "";
-      p.timer = null;
-      showMoment();
-    }, 2600);
-  }
-
-  const TROPHY = `<svg class="trophy" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M7 3h10v2h3v3a4 4 0 0 1-4 4h-.3A5 5 0 0 1 13 14.9V17h3v2H8v-2h3v-2.1A5 5 0 0 1 8.3 12H8a4 4 0 0 1-4-4V5h3zm0 4H6v1a2 2 0 0 0 1 1.7zm10 0v2.7A2 2 0 0 0 18 8V7zM6 20h12v2H6z"/></svg>`;
-
-  // The game's part of the end of a session: XP, level, combo, accuracy, floors, records, conquistas.
-  function gameDone(g) {
-    if (!g) return "";
-    const up = g.level.level - g.level0;
-    const lines = [`<li><b>+${fmtN(g.gain)} XP</b> nesta sessão</li>`];
-    if (g.best_combo >= 2) lines.push(`<li>Maior combo: <b>${g.best_combo}</b> acertos seguidos</li>`);
-    if (g.acc != null) lines.push(`<li>Acerto: <b>${pct(g.acc)}</b>${g.avg_acc != null ? `, e a média dos últimos 30 dias é ${pct(g.avg_acc)}` : ""}</li>`);
-    for (const f of g.floors) {
-      if (!f.total) continue;
-      const gained = f.learned - f.learned0;
-      lines.push(`<li>${esc(f.name)}: <b>${Math.floor((f.learned / f.total) * 100)}%</b> dos cartões aprendidos${gained > 0 ? ` (${plural(gained, "cartão novo", "cartões novos")} nesta sessão)` : ""}</li>`);
-    }
-    for (const r of g.records) lines.push(`<li class="dg-record">${esc(r)}</li>`);
-    const badgeCard = (b) => `<div class="badge ${b.at ? "on" : ""}">${TROPHY}<b>${esc(b.name)}</b><small>${esc(b.desc)}</small></div>`;
-    const earned = g.badges.filter((b) => b.at).length;
-    return `<section class="done-game">
-      <div class="dg-level"><span class="dg-n">Nível ${g.level.level}</span>${up > 0 ? `<span class="dg-up">${up === 1 ? "subiu um nível" : `subiu ${up} níveis`}</span>` : ""}
-        <span class="xpbar big"><i style="width:${Math.round((g.level.into / g.level.need) * 100)}%"></i></span>
-        <span class="muted">${fmtN(g.level.into)} de ${fmtN(g.level.need)} XP para o nível ${g.level.level + 1}</span></div>
-      <ul class="dg-list">${lines.join("")}</ul>
-      ${g.new_badges.length ? `<h2 class="dg-h">${g.new_badges.length === 1 ? "Conquista nova" : "Conquistas novas"}</h2><div class="badges">${g.new_badges.map(badgeCard).join("")}</div>` : ""}
-      ${g.found.length ? `<p class="note">Conquistas que você já tinha pelo histórico: ${g.found.map((b) => esc(b.name)).join(", ")}.</p>` : ""}
-      ${foldSection("c.conquistas", "Conquistas", `<span class="muted">${earned} de ${g.badges.length}</span>`, `<div class="badges">${g.badges.map(badgeCard).join("")}</div>`)}
-    </section>`;
-  }
-
   function stampOverlay(text) {
     const el = document.createElement("div");
     el.className = "stamp-overlay";
@@ -1312,8 +1153,7 @@
 
   const endStudy = () =>
     guarded(async () => {
-      const res = await api("stop", { summary: true });
-      if (res && res.view === "done") return renderDone(res);
+      await api("stop");
       const back = S.returnTo || "home";
       S.returnTo = null;
       await go(back);
@@ -1322,15 +1162,8 @@
   function renderDone(d) {
     S.view = "done";
     S.card = null;
-    const headline = d.ended
-      ? "Sessão encerrada."
-      : d.kind === "topic"
-        ? "Cartões do tópico estudados."
-        : d.kind === "errors"
-          ? "Erros refeitos."
-          : d.deck
-            ? `Tudo em dia em ${d.deck}.`
-            : "Tudo em dia por hoje.";
+    const headline =
+      d.kind === "topic" ? "Cartões do tópico estudados." : d.kind === "errors" ? "Erros refeitos." : d.deck ? `Tudo em dia em ${d.deck}.` : "Tudo em dia por hoje.";
     const buttons =
       d.kind === "topic"
         ? `<button class="btn primary" data-go="roleta">Voltar para a Roleta</button><button class="btn" data-go="home">Voltar para Hoje</button>`
@@ -1354,9 +1187,7 @@
       ${results.length ? `<div class="bubbles session-bubbles" role="img" aria-label="Respostas da sessão, em ordem: preenchida é certa, vermelha é errada">${results.map((ok, i) => `<span class="bubble ${ok ? "right" : "wrong"}" style="--i:${i}"></span>`).join("")}</div>` : ""}
       <p class="goal-note">${esc(goalText)}</p>
       <div class="actions" style="margin-top:28px">${buttons}</div>
-      ${gameDone(d.game)}
     </div>`);
-    if (d.game && (d.game.new_badges.length || d.game.level.level > d.game.level0)) setTimeout(() => play(d.game.level.level > d.game.level0 ? "levelup" : "badge"), motionOK() ? 1400 : 300);
     const strip = document.querySelector(".session-bubbles");
     if (strip && motionOK()) {
       animate(strip, "cascade");
@@ -2700,7 +2531,6 @@ Regência verbal`;
         <label class="switch"><input type="checkbox" data-fx="sound" ${d.fx.sound ? "checked" : ""}><span>Sons</span></label>
         <div class="field"><span>Volume</span><div class="inline"><input type="range" min="0" max="100" step="5" value="${Math.round(d.fx.volume * 100)}" data-fx="volume" aria-label="Volume"><button class="btn quiet" data-act="fx-test">Ouvir um exemplo</button></div></div>
         <label class="switch"><input type="checkbox" data-fx="motion" ${d.fx.motion ? "checked" : ""}><span>Animações</span></label>
-        <label class="switch"><input type="checkbox" data-fx="game" ${d.fx.game !== false ? "checked" : ""}><span>Prédio, nível e combo no estudo</span></label>
         <p class="note">Se o Windows estiver com as animações desligadas (Acessibilidade, Efeitos visuais), as do painel também ficam.</p>
       </section>
       ${agendaSection(d)}
@@ -3130,15 +2960,6 @@ Regência verbal`;
       return;
     }
     if (typing) return;
-    if (S.view === "done" && k === "escape" && !overlays.length) {
-      // the end of a session: Esc does what the first button says
-      const first = document.querySelector(".page.done .actions .btn.primary");
-      if (first) {
-        ev.preventDefault();
-        first.click();
-      }
-      return;
-    }
     if (S.view !== "study" || !S.card) return;
     if ((ev.ctrlKey || ev.metaKey) && k === "z") {
       ev.preventDefault();

@@ -177,34 +177,6 @@ def set_today_to_penal():
     js(f"(function(){{var i=document.querySelector('.agenda-in[data-day=\"{i}\"]'); i.value='Direito Penal'; i.dispatchEvent(new Event('input',{{bubbles:true}}));}})()")
 
 
-def near_level_up():
-    """Puts the session's XP a few points short of the next level, to see the level-up moment."""
-    from painel_estudos import jogo
-
-    g = (mw.painel_estudos.api.session or {}).get("game")
-    if not g:
-        log("near level up: no game in this session")
-        return
-    lv = jogo.level_of(g["xp"])
-    extra = lv["need"] - lv["into"] - 5
-    g["xp"] += extra
-    g["j"]["bonus"] += extra  # saved like a bonus, so the next session starts from the same XP
-    log(f"near level up: xp {g['xp']}, level {lv['level']}")
-
-
-def leave_done():
-    """The end-of-session page, if it is showing: its first button (Voltar para Hoje, and so on)."""
-    js("(function(){var b=document.querySelector('.page.done .actions .btn.primary'); if (b) b.click();})()")
-
-
-def game_state(label):
-    g = (mw.painel_estudos.api.session or {}).get("game")
-    if g:
-        log(f"{label}: xp {g['xp']} combo {g['combo']} best {g['best']} gain {g['gain']} badges {sorted(g['j']['badges'])}")
-    else:
-        log(f"{label}: no game")
-
-
 def pick_cat(cat_id):
     js(f"(function(){{var s=document.querySelector('[data-ro-cat]'); s.value={json.dumps(cat_id)}; s.dispatchEvent(new Event('change',{{bubbles:true}}));}})()")
 
@@ -292,25 +264,15 @@ STEPS = [
     (lambda: shot("05_meta_cumprida"), 2600),
     (lambda: key("z", ctrlKey=True), 1800),
     (lambda: report("after undo"), 300),
-    (lambda: game_state("game after undo"), 300),
     (lambda: click('[data-act="end"]'), 1800),
-    (lambda: shot("05b_resumo_encerrada"), 300),
-    (lambda: js("var m=document.getElementById('main'); m.scrollTop = m.scrollHeight;"), 500),
-    (lambda: shot("05c_resumo_conquistas"), 300),
-    (leave_done, 1600),
     # multiple choice
     (lambda: study_deck("Administrativo"), 2200),
     (lambda: answer(False), 1600),
     (lambda: shot("06_mc_errou"), 300),
     (lambda: key("enter"), 1800),
-    (near_level_up, 200),
     (lambda: answer(True), 1600),
-    (lambda: key("1"), 900),  # Difícil
-    (lambda: shot("06b_subiu_de_nivel"), 300),
-    (lambda: game_state("game after the level up"), 300),
+    (lambda: key("1"), 1800),  # Difícil
     (lambda: click('[data-act="end"]'), 1600),
-    (lambda: shot("06c_resumo_nivel"), 300),
-    (leave_done, 1600),
     # normal cards until the deck is done
     (lambda: study_deck("Civil"), 2200),
     (lambda: key(" "), 1600),
@@ -397,7 +359,6 @@ STEPS = [
     (lambda: report("errors session"), 200),
     (lambda: shot("33_refazer_erros"), 300),
     (lambda: click('[data-act="end"]'), 2000),
-    (leave_done, 1600),
     (lambda: report("after ending the errors session"), 200),
     (lambda: temp_deck_state("after errors session"), 200),
     (lambda: js("PE.go('roleta')"), 1800),
@@ -583,16 +544,6 @@ STEPS = [
     (lambda: js("PE.go('home')"), 1800),
     (lambda: agenda_state("after saving with Direito Penal today"), 300),
     (lambda: shot("62d_hoje_penal"), 300),
-    # 0.9: the building in the dark theme, folded and unfolded
-    (lambda: theme(True), 2200),
-    (lambda: click('.day-matter [data-act="study"]'), 2400),
-    (lambda: shot("63_predio_escuro"), 300),
-    (lambda: click('.hud-fold'), 600),
-    (lambda: shot("63b_predio_dobrado"), 300),
-    (lambda: click('.hud-fold'), 600),
-    (lambda: click('[data-act="end"]'), 1600),
-    (leave_done, 1600),
-    (lambda: theme(False), 2000),
     (ui_file, 300),
     (lambda: mw.close(), 0),
 ]
