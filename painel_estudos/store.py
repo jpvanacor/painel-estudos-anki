@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 from typing import Any
 
+from . import agenda
 from . import roleta as ro
 
 KEY = "painelEstudos"
@@ -18,6 +19,7 @@ DEFAULTS: dict[str, Any] = {
     "reasons": {},  # why a card was missed: review log id (ms, as text) -> reason code
     "made": [],  # ids of the decks the panel created for Roleta topics (see stats.matter_decks)
     "trash": [],  # what the Roleta removed, for the Lixeira (see roleta.clean_trash)
+    "agenda": None,  # the two-week schedule, one matéria a day (see agenda.py)
 }
 MAX_MADE = 5000
 
@@ -50,6 +52,7 @@ def load(col) -> dict[str, Any]:
     merged["reasons"] = clean_reasons(data.get("reasons"))
     merged["made"] = clean_made(data.get("made"))
     merged["trash"] = ro.clean_trash(data.get("trash"))
+    merged["agenda"] = agenda.clean(data.get("agenda"))
     if isinstance(data.get("roleta"), dict):
         merged["roleta"] = ro.load(data["roleta"])
         merged["_converted"] = False

@@ -152,12 +152,29 @@ def old_phone_block():
     cloze = next(m for m in col.models.all() if m["type"] == 1 and mobile.eligible(m["tmpls"]))
     note = col.new_note(cloze)
     note.fields[0] = "Comete furto quem {{c1::subtrai}} coisa alheia móvel, para si ou para outrem."
-    col.add_note(note, col.decks.id("Direito Penal"))
+    col.add_note(note, col.decks.id_for_name("Direito Penal (CP)") or col.decks.id("Direito Penal"))
     nt = col.models.by_name("Básico")
     for t in nt["tmpls"]:
         for side in ("qfmt", "afmt"):
             t[side] = t[side].replace(f"painel-estudos:celular v{mobile.VERSION}", "painel-estudos:celular v1")
     col.models.update_dict(nt)
+
+
+def agenda_state(label):
+    view = mw.painel_estudos.api.home()["agenda"]
+    log(f"{label}: today={view['today']} next={view['next']} week={view['week']}")
+
+
+def set_today_to_penal():
+    """Writes Direito Penal into today's box of the schedule, as a person would type it."""
+
+    from painel_estudos import agenda
+
+    api = mw.painel_estudos.api
+    i = agenda.slot(api._data()["agenda"], api._study_day())
+    if i is None:
+        return
+    js(f"(function(){{var i=document.querySelector('.agenda-in[data-day=\"{i}\"]'); i.value='Direito Penal'; i.dispatchEvent(new Event('input',{{bubbles:true}}));}})()")
 
 
 def pick_cat(cat_id):
@@ -511,6 +528,21 @@ STEPS = [
     (lambda: phone_state("phone block updated"), 300),
     (lambda: js("document.querySelector('.mobile-status').scrollIntoView({block: 'center'})"), 500),
     (lambda: shot("61c_celular_atualizado"), 300),
+    # 0.8: the matéria of the day; the default schedule starts with Constitucional, a deck the test
+    # profile doesn't have, so Ajustes changes that day to Direito Penal
+    (lambda: js("PE.go('home')"), 1800),
+    (lambda: agenda_state("default schedule"), 300),
+    (lambda: shot("62_hoje_materia_do_dia"), 300),
+    (lambda: js("var t=document.querySelector('.agenda'); if (t) t.scrollIntoView({block: 'center'});"), 600),
+    (lambda: shot("62b_hoje_cronograma"), 300),
+    (lambda: click('[data-go="ajustes"]'), 1600),
+    (lambda: js("document.getElementById('cronograma').scrollIntoView({block: 'start'});"), 500),
+    (set_today_to_penal, 300),
+    (lambda: shot("62c_ajustes_cronograma"), 300),
+    (lambda: click('[data-act="agenda-save"]'), 1600),
+    (lambda: js("PE.go('home')"), 1800),
+    (lambda: agenda_state("after saving with Direito Penal today"), 300),
+    (lambda: shot("62d_hoje_penal"), 300),
     (ui_file, 300),
     (lambda: mw.close(), 0),
 ]

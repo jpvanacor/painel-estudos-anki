@@ -697,7 +697,7 @@
         ${plan
           .map(
             (r) => `<tr class="clickable" data-go="materia" data-did="${r.did}">
-            <td><span class="cell-name">${esc(r.name)}</span>${roletaLine(r.roleta)}</td>
+            <td><span class="cell-name">${esc(r.name)}</span>${d.agenda.today && d.agenda.today.did === r.did ? ` <span class="tag-day">matéria do dia</span>` : ""}${roletaLine(r.roleta)}</td>
             <td>${count(r.new, "new")}</td><td>${count(r.learn, "learn")}</td><td>${count(r.review, "review")}</td>
             <td>${accCell(r.acc, r.answers)}</td>
             <td>${r.due ? `<button class="btn" data-act="study" data-did="${r.did}">Estudar</button>` : `<span class="muted">em dia</span>`}</td>
@@ -709,6 +709,7 @@
     page(`<div class="page">
       <p class="date">${esc(cap(d.date))}</p>
       <h1>Hoje</h1>
+      ${agendaToday(d.agenda)}
       <div class="goal">
         <p class="goal-line"><strong class="num">${round(g.done)}</strong> de <span class="num">${round(g.value)}</span> ${unitWord(g.unit, g.value)}</p>
         <div class="bubbles goal-bubbles" role="img" aria-label="${round(g.done)} de ${round(g.value)} ${unitWord(g.unit, g.value)}">${goalBubbles(g)}</div>
@@ -721,6 +722,7 @@
       }</div>
       ${d.erros7 ? `<p class="start-note muted">Caderno de erros: ${plural(d.erros7, "cartão errado", "cartões errados")} nos últimos 7 dias. <button class="link" data-go="erros">Abrir o caderno</button></p>` : ""}
       ${foldSection("h.materias", "Matérias de hoje", `<span class="muted">da mais fraca para a mais forte</span>`, planHtml)}
+      ${foldSection("h.cronograma", "Cronograma", `<span class="muted">semana ${d.agenda.week} de 2, domingo livre</span>`, agendaGrid(d.agenda))}
       ${foldSection(
         "h.roleta",
         "Roleta",
@@ -729,6 +731,35 @@
       )}
     </div>`);
     animate(document.querySelector(".goal-bubbles"), "fill");
+  }
+
+  // The matéria of the day, from the two-week schedule (Ajustes, Cronograma).
+  function agendaToday(a) {
+    const nextLine = a.next ? `<p class="day-next muted">${esc(cap(a.next_when || "depois"))}: ${esc(a.next.name)}</p>` : "";
+    if (a.sunday) return `<div class="day-matter"><p class="day-label">Domingo livre</p>${nextLine}</div>`;
+    if (!a.today) return `<div class="day-matter"><p class="day-label">Nada no cronograma para hoje</p>${nextLine}</div>`;
+    const t = a.today;
+    let act;
+    if (!t.did) act = `<span class="muted">Nenhum baralho com esse nome. Mude o nome em Ajustes, Cronograma, ou crie o baralho.</span><button class="link" data-go="ajustes">Abrir Ajustes</button>`;
+    else if (t.due) act = `<button class="btn primary" data-act="study" data-did="${t.did}">Estudar ${esc(t.name)}</button><span class="muted">${plural(t.due, "cartão", "cartões")} para hoje</span>`;
+    else act = `<span class="muted">Os cartões dessa matéria estão em dia.</span><button class="link" data-go="materia" data-did="${t.did}">Abrir a matéria</button>`;
+    return `<div class="day-matter"><p class="day-label">Matéria do dia, semana ${t.week}</p>
+      <p class="day-name">${esc(t.name)}</p>
+      <div class="actions">${act}</div>${nextLine}</div>`;
+  }
+
+  function agendaGrid(a) {
+    const rows = a.weeks[0]
+      .map((_x, i) => `<tr><th scope="row">${esc(a.weeks[0][i].day)}</th>${[0, 1]
+        .map((w) => {
+          const c = a.weeks[w][i];
+          return `<td class="${c.today ? "is-today" : ""}">${c.name ? esc(c.name) : `<span class="muted">livre</span>`}${c.today ? ` <span class="tag-day">hoje</span>` : ""}</td>`;
+        })
+        .join("")}</tr>`)
+      .join("");
+    return `<table class="grid agenda"><thead><tr><th><span class="sr-only">Dia</span></th><th class="${a.week === 1 ? "is-week" : ""}">Semana 1</th><th class="${a.week === 2 ? "is-week" : ""}">Semana 2</th></tr></thead>
+      <tbody>${rows}<tr><th scope="row">Domingo</th><td><span class="muted">livre</span></td><td><span class="muted">livre</span></td></tr></tbody></table>
+      <p class="note">O ciclo recomeça a cada duas semanas. Para mudar, use Ajustes, Cronograma.</p>`;
   }
 
   function roletaToday(r) {
@@ -2500,6 +2531,7 @@ Regência verbal`;
         <label class="switch"><input type="checkbox" data-fx="motion" ${d.fx.motion ? "checked" : ""}><span>Animações</span></label>
         <p class="note">Se o Windows estiver com as animações desligadas (Acessibilidade, Efeitos visuais), as do painel também ficam.</p>
       </section>
+      ${agendaSection(d)}
       ${mobileSection(d.mobile)}
       <section class="section"><div class="section-head"><h2>Anki</h2></div>
         <div class="actions" style="margin-top:14px"><button class="btn" data-open="prefs">Preferências do Anki</button><button class="btn" data-open="profiles">Trocar de perfil</button></div></section>
@@ -2509,6 +2541,32 @@ Regência verbal`;
       <p class="note" style="margin-top:48px">Painel de Estudos ${esc(d.version)}, perfil ${esc(d.profile)}.</p>
     </div>`);
   }
+
+  const WEEKDAY_NAMES = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
+
+  function agendaSection(d) {
+    const a = d.agenda;
+    const options = [...new Set([...d.matters, ...d.decks])];
+    const cell = (i) => `<input class="input agenda-in" data-day="${i}" list="agenda-names" value="${esc(a.days[i])}" aria-label="Semana ${Math.floor(i / 6) + 1}, ${WEEKDAY_NAMES[i % 6]}" placeholder="livre">`;
+    const rows = WEEKDAY_NAMES.map((name, i) => `<tr><th scope="row">${name}</th><td>${cell(i)}</td><td>${cell(i + 6)}</td></tr>`).join("");
+    return `<section class="section" id="cronograma"><div class="section-head"><h2>Cronograma</h2><span class="muted">uma matéria por dia, duas semanas que se repetem</span></div>
+      <p class="note">A tela Hoje mostra a matéria do dia e o botão para estudá-la. Cada nome vai para o baralho de mesmo nome (sem contar "Direito", acentos e o que está entre parênteses). Dia vazio é livre; domingo é sempre livre.</p>
+      <div class="field"><span>Primeira segunda-feira da semana 1</span><input class="input" id="agenda-start" type="date" value="${esc(a.start)}"></div>
+      <datalist id="agenda-names">${options.map((n) => `<option value="${esc(n)}">`).join("")}</datalist>
+      <table class="grid agenda-edit"><thead><tr><th><span class="sr-only">Dia</span></th><th>Semana 1</th><th>Semana 2</th></tr></thead><tbody>${rows}</tbody></table>
+      <div class="actions" style="margin-top:14px"><button class="btn primary" data-act="agenda-save">Salvar cronograma</button></div>
+    </section>`;
+  }
+
+  const saveAgenda = () =>
+    guarded(async () => {
+      const start = document.getElementById("agenda-start").value;
+      if (!start) return toast("Escolha a primeira segunda-feira.", { error: true });
+      const days = [...document.querySelectorAll(".agenda-in")].sort((x, y) => x.dataset.day - y.dataset.day).map((i) => i.value);
+      await api("agenda_save", { start, days });
+      await go("ajustes");
+      toast("Cronograma salvo.");
+    });
 
   // The phone: C/E buttons and question letters inside the cards, for AnkiDroid.
   function mobileSection(m) {
@@ -2594,6 +2652,7 @@ Regência verbal`;
     "err-redo": (t) => studyErrors(Number(t.dataset.days), t.dataset.did ? Number(t.dataset.did) : null),
     "err-open": (t) => toggleErr(t),
     "save-settings": () => saveSettings(),
+    "agenda-save": () => saveAgenda(),
     "toggle-sound": () =>
       setFx({ sound: !S.fx.sound })
         .then(() => S.fx.sound && play("right"))

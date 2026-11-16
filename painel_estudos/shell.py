@@ -27,6 +27,7 @@ PUBLIC = {
     "roleta_card_counts", "study_topic", "erros", "erro_card", "study_errors", "mobile_status",
     "mobile_enable", "mobile_disable", "deck_rename", "deck_delete", "deck_undo", "roleta_topic_deck",
     "deck_targets", "deck_move", "trash", "trash_restore", "trash_delete", "trash_empty", "ui_set",
+    "agenda_save",
 }
 
 
