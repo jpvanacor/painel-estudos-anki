@@ -672,3 +672,18 @@ kbd {
 .trash-meta { font-size: 13.5px; color: var(--pencil); }
 .trash-acts { flex: none; display: flex; gap: 6px; }
 .trash-note { margin-top: 26px; }
+
+/* 0.8: Cronograma. The matéria of the day sits under the title, the two weeks fold below. */
+.day-matter { margin: 4px 0 26px; padding: 16px 18px; background: var(--sheet); border: 1px solid var(--form-soft); border-left: 4px solid var(--ink); border-radius: 6px; max-width: 760px; }
+.day-label { color: var(--pencil); margin: 0 0 2px; font-size: 14px; }
+.day-name { font-family: var(--font-c); font-size: 30px; font-weight: 600; line-height: 1.15; margin: 0 0 12px; }
+.day-matter .actions { align-items: center; gap: 12px; }
+.day-next { margin: 12px 0 0; font-size: 14px; }
+.tag-day { display: inline-block; font-size: 12px; font-weight: 600; padding: 1px 7px; border-radius: 9px; background: var(--wash); color: var(--ink); vertical-align: 1px; }
+.grid.agenda td, .grid.agenda thead th, .grid.agenda-edit thead th { text-align: left; }
+.grid.agenda td.is-today { background: var(--wash); font-weight: 600; }
+#agenda-start { max-width: 220px; }
+.grid.agenda th.is-week { color: var(--ink); }
+.grid.agenda th[scope="row"], .grid.agenda-edit th[scope="row"] { text-align: left; color: var(--pencil); font-weight: 500; width: 110px; }
+.grid.agenda-edit td { padding: 4px 8px 4px 0; }
+.agenda-in { width: 100%; min-width: 220px; }

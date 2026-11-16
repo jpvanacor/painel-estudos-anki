@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import datetime as dt
 import json
 import os
 import re
@@ -29,12 +30,13 @@ from aqt.qt import QApplication, QFileDialog
 from aqt.sound import av_player
 from aqt.theme import theme_manager
 
+from . import agenda
 from . import cards as cardfmt
 from . import mobile
 from . import roleta as ro
 from . import stats, store, topics
 
-VERSION = "0.7.0"
+VERSION = "0.8.0"
 RATINGS = {1: CardAnswer.AGAIN, 2: CardAnswer.HARD, 3: CardAnswer.GOOD, 4: CardAnswer.EASY}
 # Topic and error sessions run in a filtered deck of their own, emptied and removed at the end.
 TEMP_DECK = "Painel de Estudos (sessão)"
@@ -133,7 +135,33 @@ class Api:
             "eta_min": round(due * progress["avg_secs"] / 60),
             "roleta": self._roleta_summary(data),
             "erros7": self._missed_cards(7),
+            "agenda": self._agenda_view(data),
         }
+
+    def _study_day(self) -> dt.date:
+        """Today as Anki counts it: the day starts at the hour set in Anki's preferences (4h)."""
+        return dt.date.fromtimestamp(int(self.col.sched.day_cutoff) - stats.DAY)
+
+    def _agenda_view(self, data: dict) -> dict:
+        view = agenda.view(data["agenda"], self._study_day(), [])
+        # each name of the schedule goes first to the deck of the Roleta matéria with that name,
+        # then to the matéria with that name, and only then to any deck with that name
+        linked = [(c["name"], c["deck"]) for c in data["roleta"]["cats"] if c.get("deck") and self.col.decks.get(c["deck"], default=False)]
+        everyone = [(d.name, int(d.id)) for d in self.col.decks.all_names_and_ids(skip_empty_default=True, include_filtered=False)]
+        nodes = stats.due_nodes(self.col)
+        for item in (view["today"], view["next"]):
+            if item:
+                did = agenda.match(item["name"], linked) or agenda.match(item["name"], self._matters(data)) or agenda.match(item["name"], everyone)
+                node = nodes.get(did) if did else None
+                item["did"] = did
+                item["due"] = (node.new_count + node.learn_count + node.review_count) if node else 0
+        return view
+
+    def agenda_save(self, start: str = "", days: list | None = None) -> dict:
+        data = self._data()
+        data["agenda"] = agenda.clean({"start": start, "days": days or []})
+        self._save(data)
+        return self.settings()
 
     def _missed_cards(self, days: int) -> int:
         since = (int(self.col.sched.day_cutoff) - days * stats.DAY) * 1000
@@ -1330,6 +1358,8 @@ class Api:
             "version": VERSION,
             "profile": mw.pm.name,
             "mobile": self.mobile_status(),
+            "agenda": data["agenda"],
+            "decks": sorted({d.name.split("::")[-1] for d in self.col.decks.all_names_and_ids(skip_empty_default=True, include_filtered=False)}),
         }
 
     def save_settings(self, goal: dict | None = None, root: int | None = None, fx: dict | None = None) -> dict:
