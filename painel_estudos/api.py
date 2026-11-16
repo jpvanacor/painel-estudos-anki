@@ -30,13 +30,13 @@ from aqt.qt import QApplication, QFileDialog
 from aqt.sound import av_player
 from aqt.theme import theme_manager
 
-from . import agenda
+from . import agenda, jogo
 from . import cards as cardfmt
 from . import mobile
 from . import roleta as ro
 from . import stats, store, topics
 
-VERSION = "0.8.1"
+VERSION = "0.9.0"
 RATINGS = {1: CardAnswer.AGAIN, 2: CardAnswer.HARD, 3: CardAnswer.GOOD, 4: CardAnswer.EASY}
 # Topic and error sessions run in a filtered deck of their own, emptied and removed at the end.
 TEMP_DECK = "Painel de Estudos (sessão)"
@@ -74,6 +74,8 @@ class Api:
 
     # ------------------------------------------------------------------ general
     def boot(self) -> dict:
+        if self.session and self.session.get("game"):
+            self._game_save()  # the page was reloaded in the middle of a session
         data = self._data()
         self.session = None
         self.card = None
@@ -142,16 +144,28 @@ class Api:
         """Today as Anki counts it: the day starts at the hour set in Anki's preferences (4h)."""
         return dt.date.fromtimestamp(int(self.col.sched.day_cutoff) - stats.DAY)
 
-    def _agenda_view(self, data: dict) -> dict:
-        view = agenda.view(data["agenda"], self._study_day(), [])
-        # each name of the schedule goes first to the deck of the Roleta matéria with that name,
-        # then to the matéria with that name, and only then to any deck with that name
+    def _deck_lists(self, data: dict) -> list[list[tuple[str, int]]]:
+        """Where a name of the cronograma is looked for, in order: the deck of the Roleta matéria
+        with that name, the matéria with that name, any deck with that name."""
         linked = [(c["name"], c["deck"]) for c in data["roleta"]["cats"] if c.get("deck") and self.col.decks.get(c["deck"], default=False)]
         everyone = [(d.name, int(d.id)) for d in self.col.decks.all_names_and_ids(skip_empty_default=True, include_filtered=False)]
+        return [linked, list(self._matters(data)), everyone]
+
+    @staticmethod
+    def _deck_for(name: str, lists: list[list[tuple[str, int]]]) -> int | None:
+        for group in lists:
+            did = agenda.match(name, group)
+            if did:
+                return did
+        return None
+
+    def _agenda_view(self, data: dict) -> dict:
+        view = agenda.view(data["agenda"], self._study_day(), [])
+        lists = self._deck_lists(data)
         nodes = stats.due_nodes(self.col)
         for item in (view["today"], view["next"]):
             if item:
-                did = agenda.match(item["name"], linked) or agenda.match(item["name"], self._matters(data)) or agenda.match(item["name"], everyone)
+                did = self._deck_for(item["name"], lists)
                 node = nodes.get(did) if did else None
                 item["did"] = did
                 item["due"] = (node.new_count + node.learn_count + node.review_count) if node else 0
@@ -218,8 +232,19 @@ class Api:
             **extra,
         }
 
-    def stop(self) -> dict:
+    def stop(self, summary: bool = False) -> dict:
+        """Ends the session. summary: with answers given, answer with the end-of-session page."""
         av_player.stop_and_clear_queue()
+        if summary and self.session and self.session.get("answered"):
+            done = self._finish()
+            self.session = None
+            done["ended"] = True
+            return done
+        if self.session and self.session.get("game"):
+            try:
+                self._game_save()
+            except Exception:  # the collection may be closing
+                pass
         self.session = None
         self.card = None
         try:
@@ -340,6 +365,7 @@ class Api:
             "counts": {"new": new, "learn": learn, "review": review},
             "session": self._session_info(),
             "can_undo": bool(self.session and self.session["actions"]),
+            "game": self._game_payload(),
         }
 
     def _autoplay(self, side: str) -> None:
@@ -416,11 +442,19 @@ class Api:
         goal = data["goal"]
         before = self._goal_done(goal)
         cid = self.card.id
+        did = int(self.card.odid or self.card.did)
+        learning = self.card.type != 2  # not yet out of learning
+        trap = right and self.parsed.mode == "ce" and self.parsed.correct == "ERRADO" and bool(self.parsed.trap)
         answer = self.col.sched.build_answer(card=self.card, states=self.states, rating=RATINGS[rating])
         self.col.sched.answer_card(answer)
         after = self._goal_done(goal)
         self.goal_flag = before < goal["value"] <= after
         action = {"kind": "answer", "right": right, "cid": cid, "i": self.session["i"]}
+        now_type = self.col.db.scalar("select type from cards where id = ?", cid)
+        if self._game_on(data):
+            # learned: out of the learning steps; a lapse puts a card back into them
+            moved = 1 if learning and now_type == 2 else -1 if not learning and now_type != 2 else 0
+            action["game"] = self._game_answer(right, did, moved, trap)
         if not right and reason in store.REASONS:
             rid = self.col.db.scalar("select max(id) from revlog where cid = ?", cid)
             if rid:
@@ -459,6 +493,8 @@ class Api:
         if action["kind"] == "answer":
             session["answered"] -= 1
             session["right"] -= int(action["right"])
+            if action.get("game"):
+                self._game_undo(action["game"])
             if action.get("rid"):
                 data = self._data()
                 if data["reasons"].pop(action["rid"], None):
@@ -485,10 +521,12 @@ class Api:
         name = session.get("title")
         if not name and session.get("single") and session.get("decks"):
             name = stats.leaf(self.col.decks.name(session["decks"][0]))
+        game = self._game_finish(session) if session.get("game") else None
         if session.get("kind"):
             self._drop_temp()
         return {
             "view": "done",
+            "game": game,
             "answered": session.get("answered", 0),
             "right": session.get("right", 0),
             "minutes": round(minutes),
@@ -497,6 +535,308 @@ class Api:
             "days": session.get("days"),
             "results": [a["right"] for a in session.get("actions", []) if a["kind"] == "answer"],
             "session": self._session_info(),
+        }
+
+    # ------------------------------------------------------------------ o prédio (the study game)
+    @staticmethod
+    def _game_on(data: dict) -> bool:
+        return bool(data["fx"].get("game", True))
+
+    def _day_start(self, day: dt.date) -> int:
+        return stats.today_start(self.col) - (self._study_day() - day).days * stats.DAY
+
+    def _studied(self, dids: list[int], start: int, end: int | None = None) -> bool:
+        if not dids:
+            return False
+        ids = ids2str(dids)
+        sql = f"select 1 from revlog r join cards c on c.id = r.cid where r.ease > 0 and r.id >= ? and r.id < ? and (c.did in {ids} or c.odid in {ids}) limit 1"
+        return bool(self.col.db.scalar(sql, start * 1000, (end or start + 2 * stats.DAY) * 1000))
+
+    def _floor(self, name: str, did: int | None, i: int | None, today: int) -> dict:
+        dids = stats.subtree(self.col, did) if did else []
+        learned = total = 0
+        if dids:
+            m = stats.maturity(self.col, dids)
+            learned, total = m["young"] + m["mature"], m["total"] - m["suspended"]
+        return {
+            "i": i, "name": name, "did": did, "dids": dids, "learned": learned, "learned0": learned, "total": total,
+            "stage": jogo.stage(learned, total), "unlock": jogo.unlock_level(i) if i is not None else 1,
+            "lit": self._studied(dids, today), "touched": False,
+        }
+
+    def _day_counts(self) -> tuple[int, int]:
+        """Cards answered today, and on the best day before today."""
+        start = stats.today_start(self.col)
+        rows = self.col.db.all(
+            "select (id / 1000 - ? + 8640000000) / 86400 - 100000 as d, count() from revlog where ease > 0 group by d", start
+        )
+        today = sum(n for d, n in rows if d == 0)
+        best = max([n for d, n in rows if d < 0] or [0])
+        return int(today), int(best)
+
+    def _game(self) -> dict:
+        """The game's state for this session, made on its first card."""
+        s = self.session
+        if s.get("game"):
+            return s["game"]
+        data = self._data()
+        j = data["jogo"]
+        right, wrong = self.col.db.first("select coalesce(sum(ease > 1), 0), coalesce(sum(ease = 1), 0) from revlog where ease > 0")
+        xp = jogo.xp_total(int(right or 0), int(wrong or 0), j["bonus"])
+        today = stats.today_start(self.col)
+        lists = self._deck_lists(data)
+        names = list(dict.fromkeys(n for n in data["agenda"]["days"] if n))
+        floors = [self._floor(name, self._deck_for(name, lists), i, today) for i, name in enumerate(names)]
+        daily = agenda.view(data["agenda"], self._study_day(), [])["today"]
+        daily_did = self._deck_for(daily["name"], lists) if daily else None
+        today_n, best_day = self._day_counts()
+        g = {
+            "today_n": today_n,
+            "j": j, "xp": xp, "level0": jogo.level_of(xp)["level"], "answers": int(right or 0) + int(wrong or 0),
+            "combo": 0, "best": 0, "gain": 0, "events": [], "badges_new": [], "found": [],
+            "combo_record0": j["records"]["combo"], "told_combo": False, "best_day": best_day,
+            "daily": set(stats.subtree(self.col, daily_did)) if daily_did else set(),
+            "floors": floors, "extra": {}, "last": None, "dirty": False, "since_save": 0,
+        }
+        s["game"] = g
+        if not j["seeded"]:
+            # the first time, the conquistas already earned are written down quietly
+            ctx = self._badge_ctx(g, data, finish=True)
+            for bid in jogo.new_badges(ctx, j["badges"]):
+                j["badges"][bid] = jogo.now_s()
+                g["found"].append(bid)
+            j["seeded"] = True
+            g["dirty"] = True
+        return g
+
+    def _floor_of(self, g: dict, did: int) -> dict | None:
+        for f in g["floors"]:
+            if did in f["dids"]:
+                return f
+        # a deck outside the cronograma: its matéria gets a floor of its own, off the tower
+        if did not in g["extra"]:
+            data = self._data()
+            home = next(((name, mid) for name, mid in self._matters(data) if did in stats.subtree(self.col, mid)), None)
+            name, mid = home if home else (stats.leaf(self.col.decks.name(did)), did)
+            f = self._floor(name, mid, None, stats.today_start(self.col))
+            for d in f["dids"]:
+                g["extra"][d] = f
+            g["extra"][did] = f
+        return g["extra"][did]
+
+    def _badge_ctx(self, g: dict, data: dict, finish: bool = False) -> dict:
+        j = g["j"]
+        today_n = self._day_counts()[0] if finish else g["today_n"]
+        floors = [f["learned"] / f["total"] for f in g["floors"] if f["total"] >= 20]
+        ctx = {
+            "best_day": max(g["best_day"], today_n),
+            "best_combo": max(g["best"], j["records"]["combo"]),
+            "level": jogo.level_of(g["xp"])["level"],
+            "answers": g["answers"],
+            "traps": j["traps"],
+            "best_floor": max(floors or [0.0]),
+            "sessions": j["sessions"],
+        }
+        if finish:
+            ctx["streak"] = stats.goal(self.col, data["goal"]["unit"], float(data["goal"]["value"]))["streak"]
+            ctx["week_done"] = self._week_done(data)
+        return ctx
+
+    def _week_done(self, data: dict) -> bool:
+        """The matéria do dia was studied on each of the six days of this week of the cronograma."""
+        today = self._study_day()
+        if today.weekday() < 5:
+            return False
+        monday = today - dt.timedelta(days=today.weekday())
+        lists = self._deck_lists(data)
+        plan = data["agenda"]
+        for k in range(6):
+            day = monday + dt.timedelta(days=k)
+            name = plan["days"][agenda.slot(plan, day)]
+            if not name:
+                continue
+            did = self._deck_for(name, lists)
+            start = self._day_start(day)
+            if not did or not self._studied(stats.subtree(self.col, did), start, start + stats.DAY):
+                return False
+        return True
+
+    def _new_badges(self, g: dict, ctx: dict) -> None:
+        j = g["j"]
+        for bid in jogo.new_badges(ctx, j["badges"]):
+            j["badges"][bid] = jogo.now_s()
+            g["badges_new"].append(bid)
+            g["events"].append({"type": "badge", "id": bid, "name": jogo.BADGE_NAMES[bid], "desc": jogo.BADGE_DESCS[bid]})
+            g["dirty"] = True
+
+    def _game_answer(self, right: bool, did: int, moved: int, trap: bool) -> dict:
+        """moved: +1 when the card became learned, -1 when it lapsed back into learning."""
+        g = self._game()
+        j = g["j"]
+        f = self._floor_of(g, did)
+        undo = {k: g[k] for k in ("xp", "combo", "best", "gain", "answers", "today_n")}
+        undo.update(bonus=j["bonus"], traps=j["traps"], floor=f, learned=f["learned"] if f else 0, lit=f["lit"] if f else False)
+        level0 = jogo.level_of(g["xp"])["level"]
+        stage0 = f["stage"] if f else 0
+        g["answers"] += 1
+        g["today_n"] += 1
+        base = jogo.XP_RIGHT if right else jogo.XP_WRONG
+        bonus = 0
+        if right:
+            g["combo"] += 1
+            bonus = jogo.combo_bonus(g["combo"]) + (jogo.DAILY_BONUS if did in g["daily"] else 0)
+            j["traps"] += int(trap)
+        else:
+            g["combo"] = 0
+        j["bonus"] += bonus
+        g["xp"] += base + bonus
+        g["gain"] += base + bonus
+        g["best"] = max(g["best"], g["combo"])
+        ev = g["events"]
+        ev.append({"type": "xp", "n": base + bonus, "bonus": bonus, "right": right})
+        if right and g["combo"] in jogo.COMBO_STEPS:
+            ev.append({"type": "combo", "n": g["combo"]})
+        if right and not g["told_combo"] and g["combo_record0"] >= 10 and g["combo"] > g["combo_record0"]:
+            g["told_combo"] = True
+            ev.append({"type": "record", "text": f"Recorde: {g['combo']} acertos seguidos"})
+        if f:
+            f["lit"] = True
+            f["touched"] = True
+            g["last"] = f
+            if moved:
+                f["learned"] = max(0, min(f["total"], f["learned"] + moved))
+                f["stage"] = jogo.stage(f["learned"], f["total"])
+                if moved > 0:
+                    ev.append({"type": "learned"})
+                if f["stage"] > stage0:
+                    ev.append({"type": "stage", "name": f["name"], "n": f["stage"]})
+        level = jogo.level_of(g["xp"])["level"]
+        if level > level0:
+            ev.append({"type": "level", "n": level})
+            for fl in g["floors"]:
+                if level0 < fl["unlock"] <= level:
+                    ev.append({"type": "unlock", "name": fl["name"], "floor": jogo.ordinal(fl["i"])})
+            if level0 < jogo.ROOF_LEVEL <= level:
+                ev.append({"type": "unlock", "name": "Telhado", "floor": "telhado"})
+        today_n = g["today_n"]
+        day = self._study_day().toordinal()
+        if g["best_day"] >= 50 and today_n > g["best_day"] and j["records"]["day_told"] != day:
+            j["records"]["day_told"] = day
+            g["dirty"] = True
+            ev.append({"type": "record", "text": f"Recorde: {today_n} cartões hoje"})
+        self._new_badges(g, self._badge_ctx(g, {}))
+        g["since_save"] += 1
+        if g["dirty"] or g["since_save"] >= 10:
+            self._game_save()
+        return undo
+
+    def _game_undo(self, undo: dict) -> None:
+        g = self.session.get("game") if self.session else None
+        if not g:
+            return
+        for k in ("xp", "combo", "best", "gain", "answers", "today_n"):
+            g[k] = undo[k]
+        g["j"]["bonus"] = undo["bonus"]
+        g["j"]["traps"] = undo["traps"]
+        f = undo.get("floor")
+        if f:
+            f["learned"] = undo["learned"]
+            f["lit"] = undo["lit"]
+            f["stage"] = jogo.stage(f["learned"], f["total"])
+        g["events"] = []
+        g["dirty"] = True
+
+    def _game_save(self) -> None:
+        g = self.session.get("game") if self.session else None
+        if not g:
+            return
+        data = self._data()
+        data["jogo"] = g["j"]
+        self._save(data)
+        g["dirty"] = False
+        g["since_save"] = 0
+
+    @staticmethod
+    def _floor_view(f: dict, level: int) -> dict:
+        return {
+            "i": f["i"], "name": f["name"], "has_deck": bool(f["did"]), "learned": f["learned"], "learned0": f["learned0"],
+            "total": f["total"], "stage": f["stage"], "unlock": f["unlock"], "open": level >= f["unlock"], "lit": f["lit"],
+            "complete": f["total"] > 0 and f["learned"] / f["total"] >= jogo.COMPLETE,
+        }
+
+    def _game_payload(self) -> dict | None:
+        data = self._data()
+        if not self.session or not self._game_on(data):
+            return None
+        g = self._game()
+        lvl = jogo.level_of(g["xp"])
+        here = self._floor_of(g, int(self.card.odid or self.card.did)) if self.card else g["last"]
+        if here:
+            g["last"] = here
+        new, learn, review = self.queue_counts
+        goal = data["goal"]
+        done = self._goal_done(goal)
+        events, g["events"] = g["events"], []
+        return {
+            "level": lvl,
+            "roof": lvl["level"] >= jogo.ROOF_LEVEL,
+            "roof_at": jogo.ROOF_LEVEL,
+            "floor": dict(self._floor_view(here, lvl["level"]), daily=bool(here["dids"]) and here["dids"][0] in g["daily"]) if here else None,
+            "tower": [dict(self._floor_view(f, lvl["level"]), here=f is here) for f in g["floors"]],
+            "session": {
+                "combo": g["combo"],
+                "best": g["best"],
+                "gain": g["gain"],
+                "results": [a["right"] for a in self.session["actions"] if a["kind"] == "answer"],
+                "remaining": new + learn + review,
+                "goal_left": max(0, round(goal["value"] - done)) if goal["unit"] == "cards" else None,
+            },
+            "events": events,
+        }
+
+    def _game_finish(self, session: dict) -> dict:
+        g = session["game"]
+        j = g["j"]
+        data = self._data()
+        answered, right = session.get("answered", 0), session.get("right", 0)
+        records = []
+        if answered:
+            j["sessions"] += 1
+        old = j["records"]["combo"]
+        if g["best"] > old:
+            if old >= 5:
+                records.append(f"Maior combo: {g['best']} acertos seguidos (antes, {old}).")
+            j["records"]["combo"] = g["best"]
+        acc = right / answered if answered else None
+        if answered >= 20 and acc is not None and acc > j["records"]["session_acc"]:
+            if j["records"]["session_acc"] > 0:
+                records.append(f"Melhor acerto numa sessão de 20 cartões ou mais: {round(acc * 100)}% (antes, {round(j['records']['session_acc'] * 100)}%).")
+            j["records"]["session_acc"] = acc
+        today_n, _best = self._day_counts()
+        if g["best_day"] >= 50 and today_n > g["best_day"]:
+            records.append(f"Mais cartões num dia: {today_n} hoje (antes, {g['best_day']}).")
+        ctx = self._badge_ctx(g, data, finish=True)
+        ctx.update(perfect=answered >= 20 and right == answered, sessions=j["sessions"])
+        self._new_badges(g, ctx)
+        g["dirty"] = True
+        self._game_save()
+        all_dids = [d for _n, mid in self._matters(data) for d in stats.subtree(self.col, mid)]
+        avg, _n = stats.accuracy(self.col, all_dids, 30) if all_dids else (None, 0)
+        lvl = jogo.level_of(g["xp"])
+        floors = [f for f in g["floors"] if f["touched"]] + [f for f in {id(f): f for f in g["extra"].values()}.values() if f["touched"]]
+        badges = {b["id"]: b for b in jogo.badge_list(j["badges"])}
+        return {
+            "gain": g["gain"],
+            "level": lvl,
+            "level0": g["level0"],
+            "best_combo": g["best"],
+            "acc": acc,
+            "avg_acc": avg,
+            "records": records,
+            "new_badges": [badges[b] for b in g["badges_new"]],
+            "found": [badges[b] for b in g["found"]],
+            "badges": list(badges.values()),
+            "floors": [self._floor_view(f, lvl["level"]) for f in floors],
         }
 
     # ------------------------------------------------------------------ matérias
@@ -1387,7 +1727,7 @@ class Api:
             volume = max(0.0, min(1.0, float(volume)))
         except (TypeError, ValueError):
             volume = 0.7
-        return {"sound": bool(fx.get("sound", True)), "volume": round(volume, 2), "motion": bool(fx.get("motion", True))}
+        return {"sound": bool(fx.get("sound", True)), "volume": round(volume, 2), "motion": bool(fx.get("motion", True)), "game": bool(fx.get("game", True))}
 
     # ------------------------------------------------------------------ celular (AnkiDroid)
     def mobile_status(self) -> dict:
