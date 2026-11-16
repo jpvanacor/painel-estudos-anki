@@ -260,7 +260,7 @@ table.grid tr.clickable:hover td { background: var(--wash); }
 
 /* the answer marks: Certo/Errado and A to E */
 .mark {
-  --fill: var(--ink);
+  --fill: transparent; /* no fill until chosen: at 0% the gradient still left a dot in the middle */
   display: inline-grid; place-items: center; flex: none;
   width: 42px; height: 42px; border-radius: 50%;
   border: 2px solid var(--form);
@@ -268,7 +268,7 @@ table.grid tr.clickable:hover td { background: var(--wash); }
   font-family: var(--font-c); font-weight: 600; font-size: 18px; color: var(--pencil);
   transition: --r .26s ease-out, color .2s, border-color .2s;
 }
-.chosen .mark { --r: 100%; border-color: var(--fill); color: var(--paper); }
+.chosen .mark { --fill: var(--ink); --r: 100%; border-color: var(--fill); color: var(--paper); }
 .chosen.is-wrong .mark { --fill: var(--wrong); }
 .is-correct .mark { box-shadow: 0 0 0 3px var(--sheet), 0 0 0 5px var(--right); color: var(--right); border-color: var(--right); }
 .chosen.is-correct .mark { color: var(--paper); }
