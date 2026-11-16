@@ -8,14 +8,6 @@ Extensão do Anki que troca a janela principal por uma interface de estudo para 
 - **Cronograma**: uma matéria por dia, de segunda a sábado, em duas semanas que se repetem (domingo livre). A tela Hoje mostra a matéria do dia com o botão Estudar, a do dia seguinte e a grade das duas semanas, com o dia de hoje marcado; na tabela Matérias de hoje, a matéria do dia ganha a etiqueta "matéria do dia".
   - Em Ajustes, Cronograma: a primeira segunda-feira da semana 1 e os 12 dias. Cada nome vai para o baralho de mesmo nome, sem contar "Direito", acentos e o que está entre parênteses ("Língua Portuguesa" acha o baralho "Português"; "Direito Civil" não confunde com "Direito Processual Civil"). Fica salvo na coleção e sincroniza.
   - O cronograma que vem pronto começa em 16/11/2026: Constitucional, Penal, Português, Civil, Institucional do MP e Processual Penal na semana 1; Informática, Administrativo, Legislação Especial, Processual Civil, Redação e Ambiental na semana 2. As três matérias que não são de direito ficam de quatro em quatro dias.
-- **O prédio** (nível, XP, combo e conquistas): enquanto você estuda, uma faixa em pixel art acima do cartão, no estilo do The Quiet Floor, mostra o prédio dos seus estudos.
-  - Cada matéria do cronograma é um andar, na ordem do cronograma, com o café no térreo. Os níveis abrem os andares (o primeiro no nível 1, depois um a cada dois níveis) e o telhado no nível 25; andar ainda fechado aparece em obras.
-  - Dentro, o andar da matéria que você está estudando. Ele ganha móveis (estante, tapete e plantas, cantinho do café, luzes) e estudantes simulados conforme cresce a parte dos cartões já aprendidos, fora da fase de aprendizado; com 90%, ganha placa dourada. As janelas do andar acendem nos dias em que você estuda a matéria.
-  - XP: 10 por acerto e 2 por erro (todo cartão conta, nada é tirado), contado de todo o histórico de revisões, então as revisões feitas no celular também valem. Combo de 5 acertos seguidos dá 2 a mais por acerto, combo de 10, 5 a mais, e a matéria do dia dá 3 a mais por acerto.
-  - Ao lado do prédio: nível, barra de XP, quanto da matéria está aprendido, XP da sessão e combo. Abaixo: as respostas da sessão (verde certo, vermelho errado), o que falta e a marca da meta do dia.
-  - Momentos maiores (subir de nível, andar novo, andar com móveis novos, conquista, recorde, 10 acertos seguidos) aparecem sobre o prédio, com som; o carimbo da meta continua.
-  - Fim da sessão (ou Encerrar, depois de responder algum cartão): XP ganho, nível, maior combo, acerto comparado com a média dos últimos 30 dias, quanto cada matéria estudada tem aprendido, recordes e conquistas. São 18 conquistas; as que o histórico já garante entram na primeira sessão, sem festa.
-  - A seta ao lado do nível esconde o prédio (fica guardado neste computador). Em Ajustes, Sons e animações, "Prédio, nível e combo no estudo" desliga tudo.
 - **Estudo**:
   - Cartões Certo/Errado (formato da skill `anki-lei-seca`) ganham os botões C e E.
   - Questões (formato da skill `questoes-concurso`) ganham alternativas clicáveis de A a E.
@@ -63,7 +55,7 @@ Quem usava o Edital da versão 0.1 não perde nada: ao abrir a 0.2 ou mais nova,
 
 ## Instalar
 
-1. Na pasta [`versoes`](versoes), abra o arquivo da versão mais nova (hoje, `painel_estudos-0.9.1.ankiaddon`) e baixe pelo botão de download do GitHub.
+1. Na pasta [`versoes`](versoes), abra o arquivo da versão mais nova (hoje, `painel_estudos-0.9.2.ankiaddon`) e baixe pelo botão de download do GitHub.
 2. No Anki: Ferramentas, Extensões, Instalar de um arquivo. Escolha o arquivo e reinicie o Anki.
 
 Para atualizar, instale o arquivo novo do mesmo jeito. Se o celular estiver ativado e a versão nova trouxer um bloco novo, Ajustes mostra Atualizar; depois, sincronize o computador e então o celular. Se algo der errado, segure Shift enquanto abre o Anki: ele abre sem extensões.
